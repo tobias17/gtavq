@@ -2,8 +2,8 @@
 migrated to tinygrad from: https://github.com/commaai/commavq/blob/048e825079949b86b8f6ccaeee5315d846c633dd/utils/vqvae.py
 which was adapted from: https://github.com/CompVis/taming-transformers
 """
-from tinygrad import Tensor, nn
-from tinygrad.helpers import fetch
+from tinygrad import Tensor, nn, dtypes
+from tinygrad.helpers import fetch, tqdm
 from tinygrad.nn.state import load_state_dict, torch_load
 from dataclasses import dataclass
 from functools import partial
@@ -81,37 +81,37 @@ class ResnetBlock:
       return x + h
 
 class AttnBlock:
-  def __init__(self, in_channels:int):
-    self.in_channels = in_channels
-    self.norm = Normalize(in_channels)
-    self.q = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
-    self.k = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
-    self.v = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
-    self.proj_out = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+   def __init__(self, in_channels:int):
+      self.in_channels = in_channels
+      self.norm = Normalize(in_channels)
+      self.q = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+      self.k = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+      self.v = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+      self.proj_out = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
 
-  def __call__(self, x:Tensor) -> Tensor:
-    h_ = x
-    h_ = self.norm(h_)
-    q = self.q(h_)
-    k = self.k(h_)
-    v = self.v(h_)
+   def __call__(self, x:Tensor) -> Tensor:
+      h_ = x
+      h_ = self.norm(h_)
+      q = self.q(h_)
+      k = self.k(h_)
+      v = self.v(h_)
 
-    # compute attention
-    b,c,h,w = q.shape
-    q = q.reshape(b,c,h*w)
-    q = q.permute(0,2,1)    # b,hw,c
-    k = k.reshape(b,c,h*w)  # b,c,hw
-    w_ = q.matmul(k)        # b,hw,hw    w[b,i,j]=sum_c q[b,i,c]k[b,c,j]
-    w_ = w_.mul(int(c)**(-0.5))
-    w_ = w_.softmax(axis=2)
+      # compute attention
+      b,c,h,w = q.shape
+      q = q.reshape(b,c,h*w)
+      q = q.permute(0,2,1)    # b,hw,c
+      k = k.reshape(b,c,h*w)  # b,c,hw
+      w_ = q.matmul(k)        # b,hw,hw    w[b,i,j]=sum_c q[b,i,c]k[b,c,j]
+      w_ = w_.mul(int(c)**(-0.5))
+      w_ = w_.softmax(axis=2)
 
-    # attend to values
-    v = v.reshape(b,c,h*w)
-    w_ = w_.permute(0,2,1)   # b,hw,hw (first hw of k, second of q)
-    h_ = v.matmul(w_)        # b, c,hw (hw of q) h_[b,c,j] = sum_i v[b,c,i] w_[b,i,j]
-    h_ = h_.reshape(b,c,h,w)
+      # attend to values
+      v = v.reshape(b,c,h*w)
+      w_ = w_.permute(0,2,1)   # b,hw,hw (first hw of k, second of q)
+      h_ = v.matmul(w_)        # b, c,hw (hw of q) h_[b,c,j] = sum_i v[b,c,i] w_[b,i,j]
+      h_ = h_.reshape(b,c,h,w)
 
-    return x + self.proj_out(h_)
+      return x + self.proj_out(h_)
 
 class VectorQuantizer:
    def __init__(self, num_embeddings:int, embedding_dim:int):
@@ -139,19 +139,11 @@ class VectorQuantizer:
       return quantized, encoding_indices
 
    # the decode function
-   def decode(self, encoding_indices):
-      b, s = encoding_indices.shape
-      encoding_indices = encoding_indices.rearrange('b s -> (b s) 1', b=b, s=s)
-      quantized = self.embed(encoding_indices)
-      quantized = quantized.rearrange('(b s) c -> b s c', b=b, c=self._embedding_dim, s=s).contiguous()
-      encoding_indices = encoding_indices.rearrange('(b s) 1 -> b s', b=b, s=s)
-      return quantized, encoding_indices
+   def decode(self, encoding_indices:Tensor) -> Tensor:
+      return self.embed(encoding_indices)
 
-   def embed(self, encoding_indices):
-      encodings = Tensor.zeros(encoding_indices.shape[0], self._num_embeddings, device=encoding_indices.device)
-      encodings.scatter_(1, encoding_indices, 1)
-      quantized = Tensor.matmul(encodings, self._embedding.weight)
-      return quantized
+   def embed(self, encoding_indices:Tensor) -> Tensor:
+      return self._embedding(encoding_indices)
 
 @dataclass
 class DownBlock:
@@ -294,7 +286,7 @@ class Decoder:
 
    def __call__(self, encoding_indices):
       # run the decoder part of VQ
-      z, _ = self.quantize.decode(encoding_indices)
+      z = self.quantize.decode(encoding_indices)
       z = z.rearrange('b (h w) c -> b c h w', w=self.config.quantized_resolution)
       z = self.post_quant_conv(z)
       self.last_z_shape = z.shape
@@ -330,3 +322,35 @@ class Decoder:
    def load_from_pretrained(self, url='https://huggingface.co/commaai/commavq-gpt2m/resolve/main/decoder_pytorch_model.bin') -> 'Decoder':
       load_state_dict(self, torch_load(str(fetch(url))))
       return self
+
+def transpose_and_clip(x:Tensor) -> Tensor:
+   return x.permute(0, 2, 3, 1).clip(0, 255).cast(dtypes.uint8)
+
+def write_video(frames_rgb, out, fps=20):
+   import cv2
+   size = frames_rgb[0].shape[:2][::-1]
+   video = cv2.VideoWriter(out, 0, fps, size)
+   for i in range(frames_rgb.shape[0]):
+      video.write(cv2.cvtColor(frames_rgb[i], cv2.COLOR_RGB2BGR))
+   video.release()
+   return out
+
+if __name__ == "__main__":
+   Tensor.training = False
+   from tinygrad import TinyJit
+   import numpy as np
+
+   decoder = Decoder(CompressorConfig()).load_from_pretrained()
+   tokens  = np.load("tokens.npy").astype(np.int64)
+
+   @TinyJit
+   def decode_step(t:Tensor) -> Tensor:
+      return decoder(t).realize()
+
+   decoded_frames = []
+   for i in tqdm(range(120)):
+      frame = decode_step(Tensor(tokens[i]).reshape(1,-1).realize())
+      decoded_frames.append(transpose_and_clip(frame).realize())
+   decoded_video = Tensor.cat(*decoded_frames)
+
+   write_video(decoded_video.numpy(), '/tmp/decoded.avi', fps=20)
