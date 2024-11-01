@@ -241,7 +241,7 @@ class Encoder:
       return self
 
 class Decoder:
-   def __init__(self, config:CompressorConfig):
+   def __init__(self, config=CompressorConfig()):
       self.temb_ch = 0
       self.config = config
 
