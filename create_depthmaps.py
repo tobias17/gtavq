@@ -5,17 +5,22 @@ from tinygrad.helpers import tqdm
 from vqvae import Decoder
 from PIL import Image
 from threading import Thread
+import time
 
 import sys, os
 sys.path.append("../depth-fm")
-from depthfm import DepthFM
+from depthfm import DepthFM # type: ignore
 import torch
 
 BATCH_SIZE = 24
+MAX_PER = BATCH_SIZE * 10
 
-def async_save(depth:np.ndarray, i:int, out_root:str):
+def get_filepath_for(out_root:str, index:int) -> str:
+   return f"{out_root}/{index:04d}.png"
+
+def async_save(depth:np.ndarray, out_root:str, i:int):
    for j in range(BATCH_SIZE):
-      Image.fromarray(depth[j]).save(f"{out_root}/{i+j:04d}.png")
+      Image.fromarray(depth[j]).save(get_filepath_for(out_root, i+j))
 
 def main():
    dataset = load_dataset("/home/tobi/datasets/commavq", trust_remote_code=True)
@@ -32,14 +37,22 @@ def main():
    for split_key, split in dataset.items():
       print((banner := "\n"+"="*80+"\n\n") + f"Starting split '{split_key}'" + banner[::-1])
       for filepath in split["path"]:
+         tokens = np.load(filepath).astype(np.int64)
+         max_amount = MAX_PER if MAX_PER > 0 else tokens.shape[0]
+
          out_root = f"./depthmaps/{split_key}/{os.path.basename(filepath).split('.')[0]}"
          if not os.path.exists(out_root):
             os.makedirs(out_root)
          print(out_root)
+         if len(os.listdir(out_root)) >= max_amount:
+            continue
 
-         tokens = np.load(filepath).astype(np.int64)
-         assert tokens.shape[0] % BATCH_SIZE == 0
-         for i in tqdm(range(0, tokens.shape[0], BATCH_SIZE)):
+         assert max_amount % BATCH_SIZE == 0
+         for i in tqdm(range(0, max_amount, BATCH_SIZE)):
+            if os.path.exists(get_filepath_for(out_root, i + BATCH_SIZE - 1)):
+               time.sleep(0.02)
+               continue
+
             t = Tensor(tokens[i:i+BATCH_SIZE]).reshape(BATCH_SIZE, -1).realize()
             frames = decode_step(t)
             im = torch.from_numpy((frames.clip(0, 255) / 127.5 - 1).numpy().astype(np.float16)).cuda()
@@ -48,7 +61,7 @@ def main():
             depth = depth.squeeze(1).cpu().numpy()
 
             depth = (depth * 255).astype(np.uint8)
-            Thread(target=async_save, args=(depth,i,out_root)).start()
+            Thread(target=async_save, args=(depth,out_root,i)).start()
 
 if __name__ == "__main__":
    main()
