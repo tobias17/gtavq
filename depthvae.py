@@ -4,8 +4,10 @@ from tinygrad.nn.state import get_parameters, get_state_dict
 from dataclasses import dataclass
 from vqvae import Encoder, Decoder
 from PIL import Image
+from queue import Queue
+from threading import Thread, Event
 import numpy as np
-import os
+import os, time
 
 @dataclass
 class CompressorConfig:
@@ -55,6 +57,24 @@ class VQModel:
       self.dec = Decoder(config)
       self.dec.quantize = self.enc.quantize
 
+kill_event = Event()
+
+def async_loader(queue:Queue, max_size:int):
+   ROOT = "./depthmaps"
+   for splitdir in os.listdir(ROOT):
+      for scenedir in os.listdir(f"{ROOT}/{splitdir}"):
+         for framename in os.listdir(f"{ROOT}/{splitdir}/{scenedir}"):
+            while True:
+               if kill_event.is_set():
+                  return
+               if queue.qsize() >= max_size:
+                  time.sleep(0.05)
+                  continue
+
+               frame = np.array(Image.open(f"{ROOT}/{splitdir}/{scenedir}/{framename}"))
+               queue.put(frame)
+   queue.put(None)
+
 def train():
    Tensor.training = True
    Tensor.manual_seed(42)
@@ -68,23 +88,32 @@ def train():
    optim = AdamW(get_parameters(model), lr=LEARNING_RATE)
    step_i = 0
 
-   ROOT = "./depthmaps"
-   for splitdir in os.listdir(ROOT):
-      for scenedir in os.listdir(f"{ROOT}/{splitdir}"):
-         for framename in os.listdir(f"{ROOT}/{splitdir}/{scenedir}"):
-            frame_np = np.array(Image.open(f"{ROOT}/{splitdir}/{scenedir}/{framename}"))
+   queue = Queue()
+   Thread(target=async_loader, args=(queue,GLOBAL_BS*4)).start()
+   
+   while True:
+      frames = []
+      while len(frames) < GLOBAL_BS:
+         frame = queue.get()
+         if frame is None:
+            print("REACHED END OF DATA")
+            return
+         frames.append(Tensor(frame, dtype=TRAIN_DTYPE).unsqueeze(0))
+      
+      init_x = Tensor.stack(*frames)
+      token_probs = model.enc(init_x)
+      pred_x = model.dec(token_probs, as_min_encodings=True)
 
-            init_x = Tensor(frame_np, dtype=TRAIN_DTYPE).unsqueeze(0).unsqueeze(0)
-            token_probs = model.enc(init_x)
-            pred_x = model.dec(token_probs, as_min_encodings=True)
+      loss = (init_x - pred_x).abs().mean()
+      optim.zero_grad()
+      loss.backward()
+      optim.step()
 
-            loss = (init_x - pred_x).abs().mean()
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-
-            step_i += 1
-            print(f"{step_i:04d}, loss: {loss.item()}")
+      step_i += 1
+      print(f"{step_i:04d}, loss: {loss.item():.3f}")
 
 if __name__ == "__main__":
-   train()
+   try:
+      train()
+   except KeyboardInterrupt:
+      kill_event.set()
