@@ -7,11 +7,6 @@ from PIL import Image
 from threading import Thread
 import time
 
-import sys, os
-sys.path.append("../depth-fm")
-from depthfm import DepthFM # type: ignore
-import torch
-
 BATCH_SIZE = 24
 MAX_PER = BATCH_SIZE * 10
 
@@ -23,6 +18,11 @@ def async_save(depth:np.ndarray, out_root:str, i:int):
       Image.fromarray(depth[j]).save(get_filepath_for(out_root, i+j))
 
 def main():
+   import sys, os
+   sys.path.append("../depth-fm")
+   from depthfm import DepthFM # type: ignore
+   import torch
+
    dataset = load_dataset("/home/tobi/datasets/commavq", trust_remote_code=True)
    decoder = Decoder().load_from_pretrained()
 
