@@ -119,7 +119,6 @@ class VectorQuantizer:
       self._num_embeddings = num_embeddings
 
       self._embedding = nn.Embedding(self._num_embeddings, self._embedding_dim)
-      # self._embedding.weight.data.uniform_(-1/self._num_embeddings, 1/self._num_embeddings)
 
    # the encode function
    def __call__(self, inputs:Tensor) -> Tuple[Tensor,Tensor]:
@@ -132,16 +131,14 @@ class VectorQuantizer:
                   - 2 * Tensor.matmul(flat_input, self._embedding.weight.T)
 
       # Encoding
-      encoding_indices = distances.argmin(axis=1).unsqueeze(1)
-      quantized = self.embed(encoding_indices)
-      print(b, s, c)
-      print(encoding_indices.shape)
-      encoding_indices = encoding_indices.rearrange('(b s) 1 -> b s', b=b, s=s)
-      return quantized, encoding_indices
+      scaled_inverted_distanced = (1 / (distances.abs() + 1e-6)) / 1e-4
+      min_encodings = scaled_inverted_distanced.softmax()
+      quantized = min_encodings.matmul(self._embedding.weight)
+      return quantized, min_encodings.rearrange('(b s) c -> b s c', b=b)
 
    # the decode function
-   def decode(self, encoding_indices:Tensor) -> Tensor:
-      return self.embed(encoding_indices)
+   def decode(self, min_encodings:Tensor) -> Tensor:
+      return min_encodings.matmul(self._embedding.weight)
 
    def embed(self, encoding_indices:Tensor) -> Tensor:
       return self._embedding(encoding_indices)
@@ -285,9 +282,12 @@ class Decoder:
       self.norm_out = Normalize(block_in)
       self.conv_out = nn.Conv2d(block_in, self.config.out_channels, kernel_size=3, stride=1, padding=1)
 
-   def __call__(self, encoding_indices):
+   def __call__(self, encoding_indices, as_min_encodings:bool=False):
       # run the decoder part of VQ
-      z = self.quantize.decode(encoding_indices)
+      if as_min_encodings:
+         z = self.quantize.decode(encoding_indices)
+      else:
+         z = self.quantize._embedding(encoding_indices)
       z = z.rearrange('b (h w) c -> b c h w', w=self.config.quantized_resolution)
       z = self.post_quant_conv(z)
       self.last_z_shape = z.shape
@@ -350,10 +350,8 @@ if __name__ == "__main__":
    #    return decoder(t).realize()
 
    decoded_1 = decoder(Tensor(tokens[0]).reshape(1,-1).realize()).realize()
-   print(f"{decoded_1.shape=}")
    encoded_1 = encoder(decoded_1).realize()
-   print(f"{encoded_1.shape=}")
-   decoded_2 = decoder(encoded_1).realize()
+   decoded_2 = decoder(encoded_1, as_min_encodings=True).realize()
 
    from PIL import Image
    for img in [decoded_1, decoded_2]:
