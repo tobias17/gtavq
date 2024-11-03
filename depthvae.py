@@ -57,22 +57,11 @@ class VQModel:
       self.dec = Decoder(config)
       self.dec.quantize = self.enc.quantize
 
-kill_event = Event()
-
-def async_loader(queue:Queue, max_size:int):
+def get_next_pack_path():
    ROOT = "./depthpacks"
    for splitdir in os.listdir(ROOT):
       for filename in os.listdir(f"{ROOT}/{splitdir}"):
-         while True:
-            if kill_event.is_set():
-               return
-            if queue.qsize() >= max_size:
-               time.sleep(0.05)
-               continue
-
-            data = np.load(f"{ROOT}/{splitdir}/{filename}")
-            queue.put(data)
-   queue.put(None)
+         yield f"{ROOT}/{splitdir}/{filename}"
 
 def train():
    Tensor.training = True
@@ -81,15 +70,13 @@ def train():
    model = VQModel()
 
    TRAIN_DTYPE = dtypes.float32
-   GLOBAL_BS = 8
-   PREFETCH  = 4
+   GLOBAL_BS = 16
 
    LEARNING_RATE = 2**-15
    optim = AdamW(get_parameters(model), lr=LEARNING_RATE)
    step_i = 0
 
-   queue = Queue()
-   Thread(target=async_loader, args=(queue,PREFETCH)).start()
+   depthpack_getter = get_next_pack_path()
 
    @TinyJit
    def train_step(init_x:Tensor) -> Tensor:
@@ -113,11 +100,13 @@ def train():
             break
 
          if data is None:
-            data = queue.get()
-            if data is None:
+            datapath = next(depthpack_getter)
+            print(datapath)
+            if datapath is None:
                print("REACHED END OF DATA")
                return
-         
+            data = np.load(datapath)
+
          amnt_needed = GLOBAL_BS - curr_sum
          if data.shape[0] <= amnt_needed:
             frames.append(Tensor(data, dtype=TRAIN_DTYPE))
@@ -137,7 +126,4 @@ def train():
       s_t = e_t
 
 if __name__ == "__main__":
-   try:
-      train()
-   except Exception:
-      kill_event.set()
+   train()
