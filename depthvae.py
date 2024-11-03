@@ -82,15 +82,29 @@ def train():
    model = VQModel()
 
    TRAIN_DTYPE = dtypes.float32
-   GLOBAL_BS = 1
+   GLOBAL_BS = 8
+   PREFETCH  = 4
 
    LEARNING_RATE = 2**-15
    optim = AdamW(get_parameters(model), lr=LEARNING_RATE)
    step_i = 0
 
    queue = Queue()
-   Thread(target=async_loader, args=(queue,GLOBAL_BS*4)).start()
+   Thread(target=async_loader, args=(queue,GLOBAL_BS*PREFETCH)).start()
    
+   @TinyJit
+   def train_step(init_x:Tensor) -> Tensor:
+      token_probs = model.enc(init_x)
+      pred_x = model.dec(token_probs, as_min_encodings=True)
+
+      loss = (init_x - pred_x).abs().mean().realize()
+      optim.zero_grad()
+      loss.backward()
+      optim.step()
+
+      return loss.realize()
+
+   s_t = time.perf_counter()
    while True:
       frames = []
       while len(frames) < GLOBAL_BS:
@@ -99,18 +113,14 @@ def train():
             print("REACHED END OF DATA")
             return
          frames.append(Tensor(frame, dtype=TRAIN_DTYPE).unsqueeze(0))
+      l_t = time.perf_counter()
       
-      init_x = Tensor.stack(*frames)
-      token_probs = model.enc(init_x)
-      pred_x = model.dec(token_probs, as_min_encodings=True)
-
-      loss = (init_x - pred_x).abs().mean()
-      optim.zero_grad()
-      loss.backward()
-      optim.step()
+      loss = train_step(Tensor.stack(*frames).realize())
 
       step_i += 1
-      print(f"{step_i:04d}, loss: {loss.item():.3f}")
+      e_t = time.perf_counter()
+      print(f"{step_i:04d}, {(e_t-s_t)*1000:.0f} ms step ({(l_t-s_t)*1000:.0f} load, {(e_t-l_t)*1000:.0f} run), loss: {loss.item():.3f}")
+      s_t = e_t
 
 if __name__ == "__main__":
    try:
