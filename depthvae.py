@@ -1,4 +1,4 @@
-from tinygrad import Tensor, TinyJit, dtypes
+from tinygrad import Tensor, TinyJit, dtypes, Device
 from tinygrad.nn.optim import AdamW
 from tinygrad.nn.state import get_parameters, safe_save, get_state_dict
 from dataclasses import dataclass
@@ -74,15 +74,22 @@ def train():
    Tensor.training = True
    Tensor.manual_seed(42)
 
-   model = VQModel()
-
    TRAIN_DTYPE = dtypes.float32
-   GLOBAL_BS = 16
-   PLOT_EVERY = 100
-   SAVE_EVERY = 1000
+
+   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
+   DEVICE_BS = 16
+   GLOBAL_BS = DEVICE_BS * len(GPUS)
+
+   model = VQModel()
+   params = set(get_parameters(model))
+   for w in params:
+      w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
+
+   PLOT_EVERY = 50
+   SAVE_EVERY = 200
 
    LEARNING_RATE = 2**-20
-   optim = AdamW(get_parameters(model), lr=LEARNING_RATE)
+   optim = AdamW(params, lr=LEARNING_RATE)
 
    depthpack_getter = get_next_pack_path()
 
@@ -136,7 +143,7 @@ def train():
             data = data[amnt_needed:]
       l_t = time.perf_counter()
 
-      init_x = Tensor.cat(*frames).realize()
+      init_x = Tensor.cat(*frames).shard(GPUS, axis=0).realize()
       assert init_x.shape[0] == GLOBAL_BS, f"{init_x.shape[0]=}, expected BS={GLOBAL_BS}"
       loss = train_step(init_x)
 
