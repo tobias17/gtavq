@@ -46,7 +46,7 @@ class Downsample:
       # no asymmetric padding in torch conv, must do it ourselves
       self.conv = nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=2, padding=0)
    def __call__(self, x:Tensor) -> Tensor:
-      return self.conv(x.pad(tuple([None]*(len(x.shape)-1)+[(0,1,0,1)]), value=0)) # type: ignore
+      return self.conv(x.pad((None,None,(0,1),(0,1)))) # type: ignore
 
 class ResnetBlock:
    def __init__(self, *, in_channels:int, out_channels=None, conv_shortcut=False, dropout, temb_channels=512):
@@ -132,9 +132,10 @@ class VectorQuantizer:
                   - 2 * Tensor.matmul(flat_input, self._embedding.weight.T)
 
       # Encoding
-      encoding_indices = distances.argmin(dim=1).unsqueeze(1)
+      encoding_indices = distances.argmin(axis=1).unsqueeze(1)
       quantized = self.embed(encoding_indices)
-      quantized = quantized.rearrange('(b s) c -> b s c', b=b, s=s, c=c).contiguous()
+      print(b, s, c)
+      print(encoding_indices.shape)
       encoding_indices = encoding_indices.rearrange('(b s) 1 -> b s', b=b, s=s)
       return quantized, encoding_indices
 
@@ -164,7 +165,7 @@ class UpBlock:
    upsample: Optional[Upsample] = None
 
 class Encoder:
-   def __init__(self, config:CompressorConfig):
+   def __init__(self, config=CompressorConfig()):
       self.config = config
       self.temb_ch = 0
       # downsampling
@@ -337,20 +338,31 @@ def write_video(frames_rgb, out, fps=20):
 
 if __name__ == "__main__":
    Tensor.training = False
-   from tinygrad import TinyJit
    import numpy as np
 
-   decoder = Decoder(CompressorConfig()).load_from_pretrained()
+   decoder = Decoder().load_from_pretrained()
+   encoder = Encoder().load_from_pretrained()
    tokens  = np.load("tokens.npy").astype(np.int64)
 
-   @TinyJit
-   def decode_step(t:Tensor) -> Tensor:
-      return decoder(t).realize()
+   # from tinygrad import TinyJit
+   # @TinyJit
+   # def decode_step(t:Tensor) -> Tensor:
+   #    return decoder(t).realize()
 
-   decoded_frames = []
-   for i in tqdm(range(120)):
-      frame = decode_step(Tensor(tokens[i]).reshape(1,-1).realize())
-      decoded_frames.append(transpose_and_clip(frame).realize())
-   decoded_video = Tensor.cat(*decoded_frames)
+   decoded_1 = decoder(Tensor(tokens[0]).reshape(1,-1).realize()).realize()
+   print(f"{decoded_1.shape=}")
+   encoded_1 = encoder(decoded_1).realize()
+   print(f"{encoded_1.shape=}")
+   decoded_2 = decoder(encoded_1).realize()
 
-   write_video(decoded_video.numpy(), '/tmp/decoded.avi', fps=20)
+   from PIL import Image
+   for img in [decoded_1, decoded_2]:
+      Image.fromarray(transpose_and_clip(img).numpy()[0]).show()
+
+   # decoded_frames = []
+   # for i in tqdm(range(120)):
+   #    frame = decode_step(Tensor(tokens[i]).reshape(1,-1).realize())
+   #    decoded_frames.append(transpose_and_clip(frame).realize())
+   # decoded_video = Tensor.cat(*decoded_frames)
+
+   # write_video(decoded_video.numpy(), '/tmp/decoded.avi', fps=20)
