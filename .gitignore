@@ -3,3 +3,4 @@
 .mypy_*
 depthmaps/
 depthpacks/
+weights/

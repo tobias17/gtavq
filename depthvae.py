@@ -1,13 +1,11 @@
 from tinygrad import Tensor, TinyJit, dtypes
 from tinygrad.nn.optim import AdamW
-from tinygrad.nn.state import get_parameters, get_state_dict
+from tinygrad.nn.state import get_parameters
 from dataclasses import dataclass
 from vqvae import Encoder, Decoder
-from PIL import Image
-from queue import Queue
-from threading import Thread, Event
+import matplotlib.pyplot as plt
 import numpy as np
-import os, time
+import os, time, datetime
 
 @dataclass
 class CompressorConfig:
@@ -58,7 +56,7 @@ class VQModel:
       self.dec.quantize = self.enc.quantize
 
 def get_next_pack_path():
-   ROOT = "./depthpacks"
+   ROOT = "/raid/datasets/depthvq/depthpacks"
    for splitdir in os.listdir(ROOT):
       for filename in os.listdir(f"{ROOT}/{splitdir}"):
          yield f"{ROOT}/{splitdir}/{filename}"
@@ -71,12 +69,21 @@ def train():
 
    TRAIN_DTYPE = dtypes.float32
    GLOBAL_BS = 16
+   PLOT_EVERY = 50
+   SAVE_EVERY = 500
 
-   LEARNING_RATE = 2**-15
+   LEARNING_RATE = 2**-18
    optim = AdamW(get_parameters(model), lr=LEARNING_RATE)
-   step_i = 0
 
    depthpack_getter = get_next_pack_path()
+
+   __weights_folder = f"weights/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
+   def save_path(*paths:str) -> str:
+      assert len(paths) > 0
+      final_folder = os.path.join(__weights_folder, *paths[:-1])
+      if not os.path.exists(final_folder):
+         os.makedirs(final_folder)
+      return os.path.join(final_folder, paths[-1])
 
    @TinyJit
    def train_step(init_x:Tensor) -> Tensor:
@@ -91,6 +98,9 @@ def train():
       return loss.realize()
 
    data = None
+   step_i = 0
+   losses = []
+
    s_t = time.perf_counter()
    while True:
       frames = []
@@ -121,8 +131,19 @@ def train():
       loss = train_step(init_x)
 
       step_i += 1
+      losses.append(loss.item())
+
+      if step_i % PLOT_EVERY == 0:
+         plt.clf()
+         plt.plot(np.arange(1, len(losses)+1)*GLOBAL_BS, losses)
+         plt.ylim((0,None))
+         plt.title("Loss")
+         fig = plt.gcf()
+         fig.set_size_inches(18, 10)
+         plt.savefig(save_path("graph_loss.png"))
+
       e_t = time.perf_counter()
-      print(f"{step_i:04d}, {(e_t-s_t)*1000:.0f} ms step ({(l_t-s_t)*1000:.0f} load, {(e_t-l_t)*1000:.0f} run), loss: {loss.item():.3f}")
+      print(f"{step_i:04d}, {(e_t-s_t)*1000:.0f} ms step ({(l_t-s_t)*1000:.0f} load, {(e_t-l_t)*1000:.0f} run), loss: {losses[-1]:.3f}")
       s_t = e_t
 
 if __name__ == "__main__":
