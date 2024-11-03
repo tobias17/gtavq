@@ -60,19 +60,18 @@ class VQModel:
 kill_event = Event()
 
 def async_loader(queue:Queue, max_size:int):
-   ROOT = "./depthmaps"
+   ROOT = "./depthpacks"
    for splitdir in os.listdir(ROOT):
-      for scenedir in os.listdir(f"{ROOT}/{splitdir}"):
-         for framename in os.listdir(f"{ROOT}/{splitdir}/{scenedir}"):
-            while True:
-               if kill_event.is_set():
-                  return
-               if queue.qsize() >= max_size:
-                  time.sleep(0.05)
-                  continue
+      for filename in os.listdir(f"{ROOT}/{splitdir}"):
+         while True:
+            if kill_event.is_set():
+               return
+            if queue.qsize() >= max_size:
+               time.sleep(0.05)
+               continue
 
-               frame = np.array(Image.open(f"{ROOT}/{splitdir}/{scenedir}/{framename}"))
-               queue.put(frame)
+            data = np.load(f"{ROOT}/{splitdir}/{filename}")
+            queue.put(data)
    queue.put(None)
 
 def train():
@@ -90,8 +89,8 @@ def train():
    step_i = 0
 
    queue = Queue()
-   Thread(target=async_loader, args=(queue,GLOBAL_BS*PREFETCH)).start()
-   
+   Thread(target=async_loader, args=(queue,PREFETCH)).start()
+
    @TinyJit
    def train_step(init_x:Tensor) -> Tensor:
       token_probs = model.enc(init_x)
@@ -104,18 +103,33 @@ def train():
 
       return loss.realize()
 
+   data = None
    s_t = time.perf_counter()
    while True:
       frames = []
-      while len(frames) < GLOBAL_BS:
-         frame = queue.get()
-         if frame is None:
-            print("REACHED END OF DATA")
-            return
-         frames.append(Tensor(frame, dtype=TRAIN_DTYPE).unsqueeze(0))
+      while True:
+         curr_sum = sum(f.shape[0] for f in frames)
+         if curr_sum >= GLOBAL_BS:
+            break
+
+         if data is None:
+            data = queue.get()
+            if data is None:
+               print("REACHED END OF DATA")
+               return
+         
+         amnt_needed = GLOBAL_BS - curr_sum
+         if data.shape[0] <= amnt_needed:
+            frames.append(Tensor(data, dtype=TRAIN_DTYPE))
+            data = None
+         else:
+            frames.append(Tensor(data[:amnt_needed], dtype=TRAIN_DTYPE))
+            data = data[amnt_needed:]
       l_t = time.perf_counter()
-      
-      loss = train_step(Tensor.stack(*frames).realize())
+
+      init_x = Tensor.cat(*frames).realize()
+      assert init_x.shape[0] == GLOBAL_BS, f"{init_x.shape[0]=}, expected BS={GLOBAL_BS}"
+      loss = train_step(init_x)
 
       step_i += 1
       e_t = time.perf_counter()
@@ -125,5 +139,5 @@ def train():
 if __name__ == "__main__":
    try:
       train()
-   except KeyboardInterrupt:
+   except Exception:
       kill_event.set()
