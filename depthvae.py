@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from vqvae import Encoder, Decoder
 import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image
 import os, time, datetime
 
 @dataclass
@@ -60,6 +61,7 @@ def get_next_pack_path():
    for splitdir in os.listdir(ROOT):
       for filename in os.listdir(f"{ROOT}/{splitdir}"):
          yield f"{ROOT}/{splitdir}/{filename}"
+   yield None
 
 def underscore_number(value:int) -> str:
    text = ""
@@ -85,13 +87,12 @@ def train():
    for w in params:
       w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
 
-   PLOT_EVERY = 50
-   SAVE_EVERY = 200
+   PLOT_EVERY = 100
+   EVAL_EVERY = 500
+   SAVE_EVERY = 500
 
-   LEARNING_RATE = 2**-20
+   LEARNING_RATE = 2**-21
    optim = AdamW(params, lr=LEARNING_RATE)
-
-   depthpack_getter = get_next_pack_path()
 
    __weights_folder = f"weights/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
    def save_path(*paths:str) -> str:
@@ -112,6 +113,15 @@ def train():
       optim.step()
 
       return loss.realize()
+
+   eval_inputs = []
+   for filepath in get_next_pack_path():
+      eval_inputs.append(np.load(filepath)[0])
+      if len(eval_inputs) >= len(GPUS):
+         break
+   eval_input = Tensor(np.stack(eval_inputs)).shard(GPUS)
+
+   depthpack_getter = get_next_pack_path()
 
    data = None
    step_i = 0
@@ -165,6 +175,18 @@ def train():
          if prev_weights is not None:
             os.remove(prev_weights)
          prev_weights = curr_weights
+
+      if step_i % EVAL_EVERY == 0:
+         inputs_dirpath = save_path("evals", "input_0.png")
+         if not os.path.exists(inputs_dirpath):
+            for i in range(len(GPUS)):
+               Image.fromarray(eval_inputs[i].reshape(*eval_inputs[i].shape[-2:])).save(save_path("evals", f"input_{i}.png"))
+         token_probs = model.enc(eval_input)
+         pred_x = model.dec(token_probs, as_min_encodings=True).clip(0,255).cast(dtypes.uint8).numpy()
+         print(pred_x.shape)
+         for i in range(len(GPUS)):
+            img = pred_x[i].reshape(*pred_x[i].shape[-2:])
+            Image.fromarray(img).save(save_path("evals", underscore_number(step_i), f"output_{i}.png"))
 
       e_t = time.perf_counter()
       print(f"{step_i:04d}, {(e_t-s_t)*1000:.0f} ms step ({(l_t-s_t)*1000:.0f} load, {(e_t-l_t)*1000:.0f} run), loss: {losses[-1]:.3f}")
