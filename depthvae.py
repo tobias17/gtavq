@@ -38,8 +38,8 @@ class CompressorConfig:
    attn_resolutions: tuple[int] = (16,)
    resolution: int = 256
    num_res_blocks: int = 2
-   z_channels: int = 128
-   vocab_size: int = 256
+   z_channels: int = 256
+   vocab_size: int = 512
    ch: int = 64
    dropout: float = 0.2
 
@@ -82,7 +82,7 @@ def train():
    BEAM.value  = 0
 
    GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
-   DEVICE_BS = 16
+   DEVICE_BS = 32
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
    model = VQModel()
@@ -90,11 +90,11 @@ def train():
    for w in params:
       w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
 
-   PLOT_EVERY = 100
-   EVAL_EVERY = 1000
-   SAVE_EVERY = 1000
+   PLOT_EVERY = 500
+   EVAL_EVERY = 5000
+   SAVE_EVERY = 5000
 
-   LEARNING_RATE = 2**-19
+   LEARNING_RATE = 2**-22
    optim = AdamW(params, lr=LEARNING_RATE)
 
    __weights_folder = f"weights/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
