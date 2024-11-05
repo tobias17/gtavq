@@ -1,4 +1,5 @@
 from tinygrad import Tensor, TinyJit, dtypes, Device
+from tinygrad.helpers import Context, BEAM
 from tinygrad.nn.optim import AdamW
 from tinygrad.nn.state import get_parameters, safe_save, get_state_dict
 from dataclasses import dataclass
@@ -8,39 +9,18 @@ import numpy as np
 from PIL import Image
 import os, time, datetime
 
-@dataclass
-class CompressorConfig:
-   in_channels:  int = 1
-   out_channels: int = 1
-   ch_mult: tuple[int,...] = (1,1,2,2,4)
-   attn_resolutions: tuple[int] = (16,)
-   resolution: int = 256
-   num_res_blocks: int = 2
-   z_channels: int = 256
-   vocab_size: int = 1024
-   ch: int = 128
-   dropout: float = 0.0
-
-   @property
-   def num_resolutions(self):
-      return len(self.ch_mult)
-
-   @property
-   def quantized_resolution(self):
-      return self.resolution // 2**(self.num_resolutions-1)
-
 # @dataclass
 # class CompressorConfig:
-#    in_channels: int = 1
+#    in_channels:  int = 1
 #    out_channels: int = 1
-#    ch_mult: tuple[int,...] = (1,1,1,2,2,4)
-#    attn_resolutions: tuple[int] = (8,)
+#    ch_mult: tuple[int,...] = (1,1,2,2,4)
+#    attn_resolutions: tuple[int] = (16,)
 #    resolution: int = 256
 #    num_res_blocks: int = 2
 #    z_channels: int = 256
-#    vocab_size: int = 512
-#    ch: int = 32
-#    dropout: float = 0.1
+#    vocab_size: int = 1024
+#    ch: int = 128
+#    dropout: float = 0.0
 
 #    @property
 #    def num_resolutions(self):
@@ -50,6 +30,27 @@ class CompressorConfig:
 #    def quantized_resolution(self):
 #       return self.resolution // 2**(self.num_resolutions-1)
 
+@dataclass
+class CompressorConfig:
+   in_channels: int = 1
+   out_channels: int = 1
+   ch_mult: tuple[int,...] = (1,1,2,2,4)
+   attn_resolutions: tuple[int] = (16,)
+   resolution: int = 256
+   num_res_blocks: int = 2
+   z_channels: int = 128
+   vocab_size: int = 256
+   ch: int = 64
+   dropout: float = 0.2
+
+   @property
+   def num_resolutions(self):
+      return len(self.ch_mult)
+
+   @property
+   def quantized_resolution(self):
+      return self.resolution // 2**(self.num_resolutions-1)
+
 class VQModel:
    def __init__(self, config=CompressorConfig()):
       self.enc = Encoder(config)
@@ -58,8 +59,8 @@ class VQModel:
 
 def get_next_pack_path():
    ROOT = "/raid/datasets/depthvq/depthpacks"
-   for splitdir in os.listdir(ROOT):
-      for filename in os.listdir(f"{ROOT}/{splitdir}"):
+   for splitdir in sorted(os.listdir(ROOT)):
+      for filename in sorted(os.listdir(f"{ROOT}/{splitdir}")):
          yield f"{ROOT}/{splitdir}/{filename}"
    yield None
 
@@ -77,6 +78,8 @@ def train():
    Tensor.manual_seed(42)
 
    TRAIN_DTYPE = dtypes.float32
+   BEAM_VALUE  = BEAM.value
+   BEAM.value  = 0
 
    GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
    DEVICE_BS = 16
@@ -88,10 +91,10 @@ def train():
       w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
 
    PLOT_EVERY = 100
-   EVAL_EVERY = 500
-   SAVE_EVERY = 500
+   EVAL_EVERY = 1000
+   SAVE_EVERY = 1000
 
-   LEARNING_RATE = 2**-21
+   LEARNING_RATE = 2**-18
    optim = AdamW(params, lr=LEARNING_RATE)
 
    __weights_folder = f"weights/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
@@ -155,7 +158,8 @@ def train():
 
       init_x = Tensor.cat(*frames).shard(GPUS, axis=0).realize()
       assert init_x.shape[0] == GLOBAL_BS, f"{init_x.shape[0]=}, expected BS={GLOBAL_BS}"
-      loss = train_step(init_x)
+      with Context(BEAM=BEAM_VALUE):
+         loss = train_step(init_x)
 
       step_i += 1
       losses.append(loss.item())
