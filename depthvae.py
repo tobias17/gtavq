@@ -1,45 +1,26 @@
 from tinygrad import Tensor, TinyJit, dtypes, Device
+from tinygrad.helpers import Context, BEAM
 from tinygrad.nn.optim import AdamW
 from tinygrad.nn.state import get_parameters, safe_save, get_state_dict
 from dataclasses import dataclass
 from vqvae import Encoder, Decoder
 import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image
 import os, time, datetime
-
-@dataclass
-class CompressorConfig:
-   in_channels:  int = 1
-   out_channels: int = 1
-   ch_mult: tuple[int,...] = (1,1,2,2,4)
-   attn_resolutions: tuple[int] = (16,)
-   resolution: int = 256
-   num_res_blocks: int = 2
-   z_channels: int = 256
-   vocab_size: int = 1024
-   ch: int = 128
-   dropout: float = 0.0
-
-   @property
-   def num_resolutions(self):
-      return len(self.ch_mult)
-
-   @property
-   def quantized_resolution(self):
-      return self.resolution // 2**(self.num_resolutions-1)
 
 # @dataclass
 # class CompressorConfig:
-#    in_channels: int = 1
+#    in_channels:  int = 1
 #    out_channels: int = 1
-#    ch_mult: tuple[int,...] = (1,1,1,2,2,4)
-#    attn_resolutions: tuple[int] = (8,)
+#    ch_mult: tuple[int,...] = (1,1,2,2,4)
+#    attn_resolutions: tuple[int] = (16,)
 #    resolution: int = 256
 #    num_res_blocks: int = 2
 #    z_channels: int = 256
-#    vocab_size: int = 512
-#    ch: int = 32
-#    dropout: float = 0.1
+#    vocab_size: int = 1024
+#    ch: int = 128
+#    dropout: float = 0.0
 
 #    @property
 #    def num_resolutions(self):
@@ -49,6 +30,27 @@ class CompressorConfig:
 #    def quantized_resolution(self):
 #       return self.resolution // 2**(self.num_resolutions-1)
 
+@dataclass
+class CompressorConfig:
+   in_channels: int = 1
+   out_channels: int = 1
+   ch_mult: tuple[int,...] = (1,1,2,2,4)
+   attn_resolutions: tuple[int] = (16,)
+   resolution: int = 256
+   num_res_blocks: int = 2
+   z_channels: int = 128
+   vocab_size: int = 256
+   ch: int = 64
+   dropout: float = 0.2
+
+   @property
+   def num_resolutions(self):
+      return len(self.ch_mult)
+
+   @property
+   def quantized_resolution(self):
+      return self.resolution // 2**(self.num_resolutions-1)
+
 class VQModel:
    def __init__(self, config=CompressorConfig()):
       self.enc = Encoder(config)
@@ -57,9 +59,10 @@ class VQModel:
 
 def get_next_pack_path():
    ROOT = "/raid/datasets/depthvq/depthpacks"
-   for splitdir in os.listdir(ROOT):
-      for filename in os.listdir(f"{ROOT}/{splitdir}"):
-         yield f"{ROOT}/{splitdir}/{filename}"
+   while True:
+      for splitdir in sorted(os.listdir(ROOT)):
+         for filename in sorted(os.listdir(f"{ROOT}/{splitdir}")):
+            yield f"{ROOT}/{splitdir}/{filename}"
 
 def underscore_number(value:int) -> str:
    text = ""
@@ -75,6 +78,8 @@ def train():
    Tensor.manual_seed(42)
 
    TRAIN_DTYPE = dtypes.float32
+   BEAM_VALUE  = BEAM.value
+   BEAM.value  = 0
 
    GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
    DEVICE_BS = 16
@@ -85,13 +90,12 @@ def train():
    for w in params:
       w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
 
-   PLOT_EVERY = 50
-   SAVE_EVERY = 200
+   PLOT_EVERY = 100
+   EVAL_EVERY = 1000
+   SAVE_EVERY = 1000
 
-   LEARNING_RATE = 2**-20
+   LEARNING_RATE = 2**-19
    optim = AdamW(params, lr=LEARNING_RATE)
-
-   depthpack_getter = get_next_pack_path()
 
    __weights_folder = f"weights/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
    def save_path(*paths:str) -> str:
@@ -112,6 +116,15 @@ def train():
       optim.step()
 
       return loss.realize()
+
+   eval_inputs = []
+   for filepath in get_next_pack_path():
+      eval_inputs.append(np.load(filepath)[0])
+      if len(eval_inputs) >= len(GPUS):
+         break
+   eval_input = Tensor(np.stack(eval_inputs)).shard(GPUS)
+
+   depthpack_getter = get_next_pack_path()
 
    data = None
    step_i = 0
@@ -145,7 +158,8 @@ def train():
 
       init_x = Tensor.cat(*frames).shard(GPUS, axis=0).realize()
       assert init_x.shape[0] == GLOBAL_BS, f"{init_x.shape[0]=}, expected BS={GLOBAL_BS}"
-      loss = train_step(init_x)
+      with Context(BEAM=BEAM_VALUE):
+         loss = train_step(init_x)
 
       step_i += 1
       losses.append(loss.item())
@@ -165,6 +179,18 @@ def train():
          if prev_weights is not None:
             os.remove(prev_weights)
          prev_weights = curr_weights
+
+      if step_i % EVAL_EVERY == 0:
+         inputs_dirpath = save_path("evals", "input_0.png")
+         if not os.path.exists(inputs_dirpath):
+            for i in range(len(GPUS)):
+               Image.fromarray(eval_inputs[i].reshape(*eval_inputs[i].shape[-2:])).save(save_path("evals", f"input_{i}.png"))
+         token_probs = model.enc(eval_input)
+         pred_x = model.dec(token_probs, as_min_encodings=True).clip(0,255).cast(dtypes.uint8).numpy()
+         print(pred_x.shape)
+         for i in range(len(GPUS)):
+            img = pred_x[i].reshape(*pred_x[i].shape[-2:])
+            Image.fromarray(img).save(save_path("evals", underscore_number(step_i), f"output_{i}.png"))
 
       e_t = time.perf_counter()
       print(f"{step_i:04d}, {(e_t-s_t)*1000:.0f} ms step ({(l_t-s_t)*1000:.0f} load, {(e_t-l_t)*1000:.0f} run), loss: {losses[-1]:.3f}")
