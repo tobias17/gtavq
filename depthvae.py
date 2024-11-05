@@ -59,10 +59,10 @@ class VQModel:
 
 def get_next_pack_path():
    ROOT = "/raid/datasets/depthvq/depthpacks"
-   for splitdir in sorted(os.listdir(ROOT)):
-      for filename in sorted(os.listdir(f"{ROOT}/{splitdir}")):
-         yield f"{ROOT}/{splitdir}/{filename}"
-   yield None
+   while True:
+      for splitdir in sorted(os.listdir(ROOT)):
+         for filename in sorted(os.listdir(f"{ROOT}/{splitdir}")):
+            yield f"{ROOT}/{splitdir}/{filename}"
 
 def underscore_number(value:int) -> str:
    text = ""
@@ -94,7 +94,7 @@ def train():
    EVAL_EVERY = 1000
    SAVE_EVERY = 1000
 
-   LEARNING_RATE = 2**-18
+   LEARNING_RATE = 2**-19
    optim = AdamW(params, lr=LEARNING_RATE)
 
    __weights_folder = f"weights/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
