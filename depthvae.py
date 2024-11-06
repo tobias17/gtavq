@@ -109,6 +109,7 @@ def train():
    for w in params:
       w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
 
+   AVG_EVERY  = 100
    PLOT_EVERY = 500
    EVAL_EVERY = 5000
    SAVE_EVERY = 5000
@@ -140,7 +141,8 @@ def train():
    eval_input = Tensor(eval_inputs).shard(GPUS)
 
    step_i = 0
-   losses = []
+   all_losses = []
+   curr_losses = []
    prev_weights = None
 
    s_t = time.perf_counter()
@@ -153,11 +155,15 @@ def train():
          loss = train_step(init_x)
 
       step_i += 1
-      losses.append(loss.item())
+      curr_losses.append(loss.item())
+
+      if step_i % AVG_EVERY == 0:
+         all_losses += (sum(curr_losses) / len(curr_losses))
+         curr_losses = []
 
       if step_i % PLOT_EVERY == 0:
          plt.clf()
-         plt.plot(np.arange(1, len(losses)+1)*GLOBAL_BS, losses)
+         plt.plot(np.arange(1, len(all_losses)+1)*GLOBAL_BS, all_losses)
          plt.ylim((0,None))
          plt.title("Loss")
          fig = plt.gcf()
@@ -184,7 +190,7 @@ def train():
             Image.fromarray(img).save(save_path("evals", underscore_number(step_i), f"output_{i}.png"))
 
       e_t = time.perf_counter()
-      print(f"{step_i:04d}, {(e_t-s_t)*1000:.0f} ms step ({(l_t-s_t)*1000:.0f} load, {(e_t-l_t)*1000:.0f} run), loss: {losses[-1]:.3f}")
+      print(f"{step_i:04d}, {(e_t-s_t)*1000:.0f} ms step ({(l_t-s_t)*1000:.0f} load, {(e_t-l_t)*1000:.0f} run), loss: {loss.item():.3f}")
       s_t = e_t
 
 if __name__ == "__main__":
