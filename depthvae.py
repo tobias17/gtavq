@@ -7,7 +7,7 @@ from vqvae import Encoder, Decoder
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
-import os, time, datetime
+import os, time, datetime, random
 
 # @dataclass
 # class CompressorConfig:
@@ -57,12 +57,29 @@ class VQModel:
       self.dec = Decoder(config)
       self.dec.quantize = self.enc.quantize
 
-def get_next_pack_path():
-   ROOT = "/raid/datasets/depthvq/depthpacks"
-   while True:
+__input_dims = -1
+__dataset_cache = None # type: ignore
+def get_random_batch(batch_size:int):
+   global __dataset_cache, __input_dims
+   if __dataset_cache is None:
+      target_shape = None
+      __dataset_cache = []
+      ROOT = "/raid/datasets/depthvq/depthpacks"
       for splitdir in sorted(os.listdir(ROOT)):
          for filename in sorted(os.listdir(f"{ROOT}/{splitdir}")):
-            yield f"{ROOT}/{splitdir}/{filename}"
+            filepath = f"{ROOT}/{splitdir}/{filename}"
+            if target_shape is None:
+               target_shape = np.load(filepath).shape
+               __input_dims = target_shape[0]
+            __dataset_cache.append(np.memmap(filepath, mode="r").reshape(*target_shape))
+   assert isinstance(__dataset_cache, list)
+   assert __input_dims > 0
+   entries = random.sample(__dataset_cache, batch_size)
+   indices = np.random.randint(0, __input_dims, size=(batch_size,))
+   frames = []
+   for i, entry in enumerate(entries):
+      frames.append(entry[indices[i]])
+   return np.stack(frames)
 
 def underscore_number(value:int) -> str:
    text = ""
@@ -76,6 +93,8 @@ def underscore_number(value:int) -> str:
 def train():
    Tensor.training = True
    Tensor.manual_seed(42)
+   np.random.seed(42)
+   random.seed(42)
 
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
@@ -117,47 +136,19 @@ def train():
 
       return loss.realize()
 
-   eval_inputs = []
-   for filepath in get_next_pack_path():
-      eval_inputs.append(np.load(filepath)[0])
-      if len(eval_inputs) >= len(GPUS):
-         break
-   eval_input = Tensor(np.stack(eval_inputs)).shard(GPUS)
+   eval_inputs = get_random_batch(len(GPUS))
+   eval_input = Tensor(eval_inputs).shard(GPUS)
 
-   depthpack_getter = get_next_pack_path()
-
-   data = None
    step_i = 0
    losses = []
    prev_weights = None
 
    s_t = time.perf_counter()
    while True:
-      frames = []
-      while True:
-         curr_sum = sum(f.shape[0] for f in frames)
-         if curr_sum >= GLOBAL_BS:
-            break
-
-         if data is None:
-            datapath = next(depthpack_getter)
-            print(datapath)
-            if datapath is None:
-               print("REACHED END OF DATA")
-               return
-            data = np.load(datapath)
-
-         amnt_needed = GLOBAL_BS - curr_sum
-         if data.shape[0] <= amnt_needed:
-            frames.append(Tensor(data, dtype=TRAIN_DTYPE))
-            data = None
-         else:
-            frames.append(Tensor(data[:amnt_needed], dtype=TRAIN_DTYPE))
-            data = data[amnt_needed:]
+      init_x = Tensor.cat(get_random_batch()).shard(GPUS, axis=0).realize()
+      assert init_x.shape[0] == GLOBAL_BS, f"{init_x.shape[0]=}, expected BS={GLOBAL_BS}"
       l_t = time.perf_counter()
 
-      init_x = Tensor.cat(*frames).shard(GPUS, axis=0).realize()
-      assert init_x.shape[0] == GLOBAL_BS, f"{init_x.shape[0]=}, expected BS={GLOBAL_BS}"
       with Context(BEAM=BEAM_VALUE):
          loss = train_step(init_x)
 
