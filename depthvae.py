@@ -7,41 +7,34 @@ from vqvae import Encoder, Decoder
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
+from threading import Thread, Event
+from queue import Queue
 import os, time, datetime, random, json, argparse
 from typing import List, Dict
 
-# @dataclass
 # class CompressorConfig:
 #    in_channels:  int = 1
 #    out_channels: int = 1
 #    ch_mult: tuple[int,...] = (1,1,2,2,4)
 #    attn_resolutions: tuple[int] = (16,)
-#    resolution: int = 256
 #    num_res_blocks: int = 2
+#    resolution: int = 256
 #    z_channels: int = 256
 #    vocab_size: int = 1024
 #    ch: int = 128
 #    dropout: float = 0.0
 
-#    @property
-#    def num_resolutions(self):
-#       return len(self.ch_mult)
-
-#    @property
-#    def quantized_resolution(self):
-#       return self.resolution // 2**(self.num_resolutions-1)
-
 @dataclass
 class CompressorConfig:
-   in_channels: int = 1
+   in_channels:  int = 1
    out_channels: int = 1
    ch_mult: tuple[int,...] = (1,1,2,2,4)
    attn_resolutions: tuple[int] = (16,)
-   resolution: int = 256
    num_res_blocks: int = 2
-   z_channels: int = 256
-   vocab_size: int = 512
-   ch: int = 64
+   resolution: int = 256
+   z_channels: int = 128
+   vocab_size: int = 256
+   ch: int = 32
    dropout: float = 0.2
 
    @property
@@ -72,15 +65,24 @@ def get_random_batch(batch_size:int) -> np.ndarray:
             if target_shape is None:
                target_shape = np.load(filepath).shape
                __input_dims = target_shape[0]
-            __dataset_cache.append(np.memmap(filepath, mode="r").reshape(*target_shape))
+            __dataset_cache.append(filepath)
    assert isinstance(__dataset_cache, list)
    assert __input_dims > 0
    entries = random.sample(__dataset_cache, batch_size)
    indices = np.random.randint(0, __input_dims, size=(batch_size,))
    frames = []
-   for i, entry in enumerate(entries):
-      frames.append(entry[indices[i]])
+   for i, filepath in enumerate(entries):
+      mmap = np.load(filepath, mmap_mode='r+')
+      frames.append(mmap[indices[i]])
    return np.stack(frames)
+
+kill_event = Event()
+def prefetch_batches(queue:Queue, batch_size:int, max_size:int=4):
+   while not kill_event.is_set():
+      if queue.qsize() >= max_size:
+         time.sleep(0.05)
+         continue
+      queue.put(get_random_batch(batch_size))
 
 def underscore_number(value:int) -> str:
    text = ""
@@ -104,18 +106,19 @@ def train():
    Tensor.training = True
    seed_all(42)
 
+   LEARNING_RATE = 2**-21
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
    GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
-   DEVICE_BS = 32
+   DEVICE_BS = 64
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
    AVG_EVERY  = 100
    PLOT_EVERY = 500
-   EVAL_EVERY = 5000
-   SAVE_EVERY = 5000
+   EVAL_EVERY = 10000
+   SAVE_EVERY = 10000
 
    model = VQModel()
    params = set(get_parameters(model))
@@ -142,7 +145,6 @@ def train():
    for w in params:
       w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
 
-   LEARNING_RATE = 2**-22
    optim = AdamW(params, lr=LEARNING_RATE)
 
    __weights_folder = f"weights/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
@@ -169,22 +171,25 @@ def train():
    eval_input = Tensor(eval_inputs).shard(GPUS)
    curr_losses = []
 
+   # queue = Queue()
+   # Thread(target=prefetch_batches, args=(queue,GLOBAL_BS,4)).start()
+
    s_t = time.perf_counter()
    while True:
       seed_all(info.step_i)
 
-      init_x = Tensor.cat(get_random_batch()).shard(GPUS, axis=0).realize()
+      init_x = Tensor(get_random_batch(GLOBAL_BS)).shard(GPUS, axis=0).realize()
       assert init_x.shape[0] == GLOBAL_BS, f"{init_x.shape[0]=}, expected BS={GLOBAL_BS}"
       l_t = time.perf_counter()
 
       with Context(BEAM=BEAM_VALUE):
          loss = train_step(init_x)
 
-      info.step_i += 1
       curr_losses.append(loss.item())
+      info.step_i += 1
 
       if info.step_i % AVG_EVERY == 0:
-         info.losses += (sum(curr_losses) / len(curr_losses))
+         info.losses.append(sum(curr_losses) / len(curr_losses))
          curr_losses = []
 
       if info.step_i % PLOT_EVERY == 0:
@@ -212,7 +217,6 @@ def train():
                Image.fromarray(eval_inputs[i].reshape(*eval_inputs[i].shape[-2:])).save(save_path("evals", f"input_{i}.png"))
          token_probs = model.enc(eval_input)
          pred_x = model.dec(token_probs, as_min_encodings=True).clip(0,255).cast(dtypes.uint8).numpy()
-         print(pred_x.shape)
          for i in range(len(GPUS)):
             img = pred_x[i].reshape(*pred_x[i].shape[-2:])
             Image.fromarray(img).save(save_path("evals", underscore_number(info.step_i), f"output_{i}.png"))
@@ -222,4 +226,7 @@ def train():
       s_t = e_t
 
 if __name__ == "__main__":
-   train()
+   try:
+      train()
+   except Exception:
+      kill_event.set()
