@@ -4,8 +4,9 @@ from PIL import Image
 from create_depthmaps import get_filepath_for
 from tinygrad.helpers import trange
 
-IN_ROOT  = "./depthmaps"
-OUT_ROOT = "/net/tiny/raid/datasets/depthvq/depthpacks"
+DS_ROOT  = f"/net/tiny/raid/datasets/depthvq"
+IN_ROOT  = f"{DS_ROOT}/depthmaps"
+OUT_ROOT = f"{DS_ROOT}/depthpacks"
 assert os.path.exists(os.path.dirname(OUT_ROOT))
 
 AMOUNT_PER = 240
