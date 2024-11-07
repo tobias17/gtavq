@@ -10,6 +10,8 @@ import time
 BATCH_SIZE = 24
 MAX_PER = BATCH_SIZE * 10
 
+OUT_ROOT  = f"/net/tiny/raid/datasets/depthvq"
+
 def get_filepath_for(out_root:str, index:int) -> str:
    return f"{out_root}/{index:04d}.png"
 
@@ -35,12 +37,14 @@ def main():
       return decoder(t).realize()
 
    for split_key, split in dataset.items():
+      if split_key in [str(i) for i in range(9)]:
+         continue
       print((banner := "\n"+"="*80+"\n\n") + f"Starting split '{split_key}'" + banner[::-1])
       for filepath in split["path"]:
          tokens = np.load(filepath).astype(np.int64)
          max_amount = MAX_PER if MAX_PER > 0 else tokens.shape[0]
 
-         out_root = f"./depthmaps/{split_key}/{os.path.basename(filepath).split('.')[0]}"
+         out_root = f"{OUT_ROOT}/depthmaps/{split_key}/{os.path.basename(filepath).split('.')[0]}"
          if not os.path.exists(out_root):
             os.makedirs(out_root)
          print(out_root)

@@ -3,7 +3,6 @@ adapted from: https://github.com/commaai/commavq/blob/master/utils/gpt.py
 which was adapted from https://github.com/pytorch-labs/gpt-fast
 """
 from tinygrad import Tensor, nn
-from typing import List
 
 class CommaGptConfig:
    block_size: int = 20*129
