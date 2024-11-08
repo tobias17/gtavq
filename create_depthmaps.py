@@ -37,8 +37,6 @@ def main():
       return decoder(t).realize()
 
    for split_key, split in dataset.items():
-      if split_key in [str(i) for i in range(9)]:
-         continue
       print((banner := "\n"+"="*80+"\n\n") + f"Starting split '{split_key}'" + banner[::-1])
       for filepath in split["path"]:
          tokens = np.load(filepath).astype(np.int64)
