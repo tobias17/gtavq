@@ -194,7 +194,7 @@ def train():
 
       if info.step_i % PLOT_EVERY == 0:
          plt.clf()
-         plt.plot(np.arange(1, len(info.losses)+1)*GLOBAL_BS, info.losses)
+         plt.plot(np.arange(1, len(info.losses)+1)*GLOBAL_BS*AVG_EVERY, info.losses)
          plt.ylim((0,None))
          plt.title("Loss")
          fig = plt.gcf()
