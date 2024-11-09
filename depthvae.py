@@ -79,14 +79,6 @@ def get_random_batch(batch_size:int) -> np.ndarray:
       frames.append(mmap[indices[i]])
    return np.stack(frames)
 
-kill_event = Event()
-def prefetch_batches(queue:Queue, batch_size:int, max_size:int=4):
-   while not kill_event.is_set():
-      if queue.qsize() >= max_size:
-         time.sleep(0.05)
-         continue
-      queue.put(get_random_batch(batch_size))
-
 def underscore_number(value:int) -> str:
    text = ""
    for magnitude in [1_000_000, 1_000]:
@@ -115,7 +107,7 @@ def train():
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
-   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(1)]
+   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(2)]
    DEVICE_BS = 32
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
@@ -126,7 +118,7 @@ def train():
 
    model = VQModel()
    lpips = LPIPS().load_from_pretrained()
-   gan   = NLayerDiscriminator()
+   gan   = NLayerDiscriminator(input_nc=1)
 
    params = list(set(get_parameters(model))) + list(set(get_parameters(gan)))
 
@@ -138,7 +130,7 @@ def train():
       def to_json(self): return asdict(self)
       @staticmethod
       def from_json(data:Dict) -> 'TrainInfo': return TrainInfo(**data)
-   
+
    if args.restore:
       assert os.path.exists(args.restore), f"failed to find restore root, searched for {args.restore}"
       data_filepath = os.path.join(args.restore, "data.json")
@@ -149,7 +141,7 @@ def train():
    else:
       info = TrainInfo()
 
-   for w in params:
+   for w in params + get_parameters(lpips):
       w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
 
    optim = AdamW(params, lr=LEARNING_RATE)
@@ -169,11 +161,12 @@ def train():
 
       rec_loss = (init_x - pred_x).abs().mean()
       prc_loss = lpips(init_x, pred_x)
+      nll_loss = Tensor.mean(rec_loss + (prc_loss * rec_loss))
       gan_mult = 0.0 if (info.step_i < GAN_AFTER) else 0.8
       gan_loss = gan_mult * hinge_d_loss(gan(init_x.detach()), gan(pred_x.detach()))
       dsc_loss = gan_mult * gan(pred_x).mean().mul(-1.0)
 
-      loss = (rec_loss + prc_loss + gan_loss + dsc_loss).realize()
+      loss = (nll_loss + gan_loss + dsc_loss).realize()
       optim.zero_grad()
       loss.backward()
       optim.step()
@@ -183,9 +176,6 @@ def train():
    eval_inputs = get_random_batch(len(GPUS))
    eval_input = Tensor(eval_inputs).shard(GPUS)
    curr_losses = []
-
-   # queue = Queue()
-   # Thread(target=prefetch_batches, args=(queue,GLOBAL_BS,4)).start()
 
    s_t = time.perf_counter()
    while True:
@@ -239,7 +229,4 @@ def train():
       s_t = e_t
 
 if __name__ == "__main__":
-   try:
-      train()
-   except Exception:
-      kill_event.set()
+   train()

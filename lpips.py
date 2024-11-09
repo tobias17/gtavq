@@ -38,6 +38,8 @@ class NetLinLayer:
          Tensor.dropout,
          nn.Conv2d(chn_in, chn_out, 1, stride=1, padding=0, bias=False),
       ]
+   def __call__(self, x:Tensor) -> Tensor:
+      return x.sequential(self.model) # type: ignore
 
 def normalize_tensor(x:Tensor, eps:float=1e-10) -> Tensor:
    norm_factor = Tensor.sqrt(Tensor.sum(x**2, axis=1, keepdim=True))
@@ -73,10 +75,10 @@ class LPIPS:
          feats0[kk], feats1[kk] = normalize_tensor(outs0[kk]), normalize_tensor(outs1[kk])
          diffs[kk] = Tensor.square(feats0[kk] - feats1[kk])
       
-      res = [spatial_average(lins[kk].model(diffs[kk]), keepdim=True) for kk in range(len(self.chns))]
+      res = [spatial_average(lins[kk](diffs[kk]), keepdim=True) for kk in range(len(self.chns))]
       val = res[0]
       for l in range(1, len(self.chns)):
-         val += res[l]
+         val = val + res[l]
       return val
 
 if __name__ == "__main__":
