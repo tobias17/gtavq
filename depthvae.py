@@ -99,25 +99,20 @@ def train():
    Tensor.training = True
    seed_all(42)
 
-   LEARNING_RATE = 2**-21
-   # GAN_AFTER   = 2000
-   GAN_AFTER   = 0
+   LEARNING_RATE = 2**-14
+   GAN_AFTER   = 2000
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
-   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(2)]
-   DEVICE_BS = 32
+   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
+   DEVICE_BS = 48
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
-   # AVG_EVERY  = 100
-   # PLOT_EVERY = 500
-   # EVAL_EVERY = 10000
-   # SAVE_EVERY = 10000
-   AVG_EVERY  = 10
-   PLOT_EVERY = 50
-   EVAL_EVERY = 100
-   SAVE_EVERY = 100
+   AVG_EVERY  = 100
+   PLOT_EVERY = 500
+   EVAL_EVERY = 10000
+   SAVE_EVERY = 10000
 
    model = VQModel()
    lpips = LPIPS().load_from_pretrained()
@@ -130,7 +125,11 @@ def train():
       step_i = 0
       losses = {}
       prev_weights = None
-      def to_json(self): return asdict(self)
+      def to_json(self): return {
+         "step_i":self.step_i,
+         "losses":self.losses,
+         "prev_weights":self.prev_weights,
+      }
       @staticmethod
       def from_json(data:Dict) -> 'TrainInfo': return TrainInfo(**data)
 
