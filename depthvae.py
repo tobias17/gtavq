@@ -101,7 +101,7 @@ def train():
 
    LEARNING_RATE = 2**-21
    # GAN_AFTER   = 2000
-   GAN_AFTER   = 50
+   GAN_AFTER   = 0
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
@@ -158,14 +158,14 @@ def train():
       return os.path.join(final_folder, paths[-1])
 
    @TinyJit
-   def train_step(init_x:Tensor) -> Tuple[Tensor,Dict[str,Tensor]]:
+   def train_step(init_x:Tensor, gan_mult:Tensor) -> Tuple[Tensor,Dict[str,Tensor]]:
       token_probs = model.enc(init_x)
       pred_x = model.dec(token_probs, as_min_encodings=True)
 
       rec_loss = (init_x - pred_x).abs().mean()
       prc_loss = lpips(init_x, pred_x)
       nll_loss = Tensor.mean(rec_loss + (prc_loss * rec_loss))
-      gan_mult = 0.0 if (info.step_i < GAN_AFTER) else 0.8
+      gan_mult = gan_mult.reshape(tuple()).to(init_x.device)
       gan_loss = gan_mult * hinge_d_loss(gan(init_x.detach()), gan(pred_x.detach()))
       dsc_loss = gan_mult * gan(pred_x).mean().mul(-1.0)
 
@@ -189,8 +189,9 @@ def train():
       assert init_x.shape[0] == GLOBAL_BS, f"{init_x.shape[0]=}, expected BS={GLOBAL_BS}"
       l_t = time.perf_counter()
 
+      gan_mult = 0.0 if (info.step_i < GAN_AFTER) else 0.8
       with Context(BEAM=BEAM_VALUE):
-         loss, losses = train_step(init_x)
+         loss, losses = train_step(init_x, Tensor([gan_mult]).realize())
 
       curr_losses.append({k:l.item() for k,l in losses.items()})
       info.step_i += 1
@@ -206,7 +207,7 @@ def train():
          for k in info.losses:
             plt.clf()
             plt.plot(np.arange(1, len(info.losses[k])+1)*GLOBAL_BS*AVG_EVERY, info.losses[k])
-            plt.ylim((0,None))
+            if k != "dsc": plt.ylim((0,None))
             plt.title("Loss")
             fig = plt.gcf()
             fig.set_size_inches(18, 10)
