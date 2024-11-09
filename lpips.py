@@ -43,6 +43,9 @@ def normalize_tensor(x:Tensor, eps:float=1e-10) -> Tensor:
    norm_factor = Tensor.sqrt(Tensor.sum(x**2, axis=1, keepdim=True))
    return x / (norm_factor + eps)
 
+def spatial_average(x:Tensor, keepdim=True) -> Tensor:
+   return x.mean([2,3], keepdim=keepdim)
+
 class LPIPS:
    def __init__(self):
       self.scaling_layer = ScalingLayer()
@@ -60,6 +63,21 @@ class LPIPS:
       for w in get_parameters(self):
          w.requires_grad = False
       return self
+
+   def __call__(self, input:Tensor, target:Tensor) -> Tensor:
+      in0_input, in1_input = self.scaling_layer(input), self.scaling_layer(target)
+      outs0, outs1 = self.net(in0_input), self.net(in1_input)
+      feats0, feats1, diffs = {}, {}, {}
+      lins = [self.lin0, self.lin1, self.lin2, self.lin3, self.lin4]
+      for kk in range(len(self.chns)):
+         feats0[kk], feats1[kk] = normalize_tensor(outs0[kk]), normalize_tensor(outs1[kk])
+         diffs[kk] = Tensor.square(feats0[kk] - feats1[kk])
+      
+      res = [spatial_average(lins[kk].model(diffs[kk]), keepdim=True) for kk in range(len(self.chns))]
+      val = res[0]
+      for l in range(1, len(self.chns)):
+         val += res[l]
+      return val
 
 if __name__ == "__main__":
    LPIPS().load_from_pretrained()

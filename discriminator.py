@@ -27,3 +27,13 @@ class NLayerDiscriminator:
 
    def __call__(self, x:Tensor) -> Tensor:
       return x.sequential(self.main) # type: ignore
+
+def hinge_d_loss(logits_real:Tensor, logits_fake:Tensor) -> Tensor:
+   loss_real = (1.0 - logits_real).relu().mean()
+   loss_fake = (1.0 + logits_fake).relu().mean()
+   return 0.5 * (loss_real + loss_fake)
+
+if __name__ == "__main__":
+   gan = NLayerDiscriminator()
+   x = Tensor.randn(8, 3, 256, 128).realize()
+   print(gan(x).realize().shape)

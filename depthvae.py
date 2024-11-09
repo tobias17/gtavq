@@ -1,6 +1,6 @@
 from tinygrad import Tensor, TinyJit, dtypes, Device
 from tinygrad.helpers import Context, BEAM
-from tinygrad.nn.optim import AdamW
+from tinygrad.nn.optim import AdamW, OptimizerGroup
 from tinygrad.nn.state import get_parameters, get_state_dict, load_state_dict, safe_save, safe_load
 from dataclasses import dataclass, asdict
 from vqvae import Encoder, Decoder
@@ -11,6 +11,9 @@ from threading import Thread, Event
 from queue import Queue
 import os, time, datetime, random, json, argparse
 from typing import List, Dict
+
+from lpips import LPIPS
+from discriminator import NLayerDiscriminator, hinge_d_loss
 
 # class CompressorConfig:
 #    in_channels:  int = 1
@@ -107,12 +110,13 @@ def train():
    seed_all(42)
 
    LEARNING_RATE = 2**-21
+   GAN_AFTER   = 2000
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
-   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
-   DEVICE_BS = 64
+   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(1)]
+   DEVICE_BS = 32
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
    AVG_EVERY  = 100
@@ -121,7 +125,10 @@ def train():
    SAVE_EVERY = 10000
 
    model = VQModel()
-   params = set(get_parameters(model))
+   lpips = LPIPS().load_from_pretrained()
+   gan   = NLayerDiscriminator()
+
+   params = list(set(get_parameters(model))) + list(set(get_parameters(gan)))
 
    @dataclass
    class TrainInfo:
@@ -160,7 +167,13 @@ def train():
       token_probs = model.enc(init_x)
       pred_x = model.dec(token_probs, as_min_encodings=True)
 
-      loss = (init_x - pred_x).abs().mean().realize()
+      rec_loss = (init_x - pred_x).abs().mean()
+      prc_loss = lpips(init_x, pred_x)
+      gan_mult = 0.0 if (info.step_i < GAN_AFTER) else 0.8
+      gan_loss = gan_mult * hinge_d_loss(gan(init_x.detach()), gan(pred_x.detach()))
+      dsc_loss = gan_mult * gan(pred_x).mean().mul(-1.0)
+
+      loss = (rec_loss + prc_loss + gan_loss + dsc_loss).realize()
       optim.zero_grad()
       loss.backward()
       optim.step()
