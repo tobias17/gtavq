@@ -102,15 +102,15 @@ def train():
    Tensor.training = True
    seed_all(42)
 
-   LEARNING_RATE = 2**-14
+   LEARNING_RATE = 2**-16
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
    # GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
    # DEVICE_BS = 48
-   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(2)]
-   DEVICE_BS = 8
+   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(4)]
+   DEVICE_BS = 32
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
    PRC_LOSS: bool = args.prc_loss  # type: ignore
@@ -181,7 +181,7 @@ def train():
 
       if PRC_LOSS:
          prc_loss = lpips(init_x, pred_x)
-         nll_loss = Tensor.mean(rec_loss + (prc_loss * rec_loss))
+         nll_loss = Tensor.mean(prc_loss * rec_loss)
          losses["nll"] = nll_loss
 
       if GAN_LOSS:
@@ -211,7 +211,7 @@ def train():
       assert init_x.shape[0] == GLOBAL_BS, f"{init_x.shape[0]=}, expected BS={GLOBAL_BS}"
       l_t = time.perf_counter()
 
-      gan_mult = 0.0 if (info.step_i < GAN_AFTER) else 0.8
+      gan_mult = 0.0 if (info.step_i < GAN_AFTER) else 0.1
       with Context(BEAM=BEAM_VALUE):
          loss, losses = train_step(init_x, Tensor([gan_mult]).realize())
 
@@ -229,7 +229,8 @@ def train():
          for k in info.losses:
             plt.clf()
             plt.plot(np.arange(1, len(info.losses[k])+1)*GLOBAL_BS*AVG_EVERY, info.losses[k])
-            if k != "dsc": plt.ylim((0,None))
+            if not (k == "dsc" or (k == "all" and "dsc" in info.losses)):
+               plt.ylim((0,None))
             plt.title("Loss")
             fig = plt.gcf()
             fig.set_size_inches(18, 10)

@@ -41,8 +41,8 @@ class NetLinLayer:
    def __call__(self, x:Tensor) -> Tensor:
       return x.sequential(self.model) # type: ignore
 
-def normalize_tensor(x:Tensor, eps:float=1e-10) -> Tensor:
-   norm_factor = Tensor.sqrt(Tensor.sum(x**2, axis=1, keepdim=True))
+def normalize_tensor(x:Tensor, eps:float=1e-6) -> Tensor:
+   norm_factor = Tensor.sqrt(Tensor.sum(x.square(), axis=1, keepdim=True))
    return x / (norm_factor + eps)
 
 def spatial_average(x:Tensor, keepdim=True) -> Tensor:

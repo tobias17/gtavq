@@ -35,7 +35,7 @@ def hinge_d_loss(logits_real:Tensor, logits_fake:Tensor) -> Tensor:
 
 def vanilla_d_loss(logits_real:Tensor, logits_fake:Tensor) -> Tensor:
    loss_real = (-logits_real).softplus().mean()
-   loss_fake =  -logits_fake .softplus().mean()
+   loss_fake =   logits_fake .softplus().mean()
    return 0.5 * (loss_real + loss_fake)
 
 if __name__ == "__main__":
