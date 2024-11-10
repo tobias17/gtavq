@@ -93,6 +93,9 @@ def seed_all(seed:int):
 
 def train():
    parser = argparse.ArgumentParser()
+   parser.add_argument('-p', '--prc-loss', action='store_true')
+   parser.add_argument('-g', '--gan-loss', action='store_true')
+   parser.add_argument('-a', '--gan-after', type=int, default=2000)
    parser.add_argument('-r', '--restore', type=str)
    args = parser.parse_args()
 
@@ -100,14 +103,19 @@ def train():
    seed_all(42)
 
    LEARNING_RATE = 2**-14
-   GAN_AFTER   = 2000
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
-   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
-   DEVICE_BS = 48
+   # GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
+   # DEVICE_BS = 48
+   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(2)]
+   DEVICE_BS = 8
    GLOBAL_BS = DEVICE_BS * len(GPUS)
+
+   PRC_LOSS: bool = args.prc_loss  # type: ignore
+   GAN_LOSS: bool = args.gan_loss  # type: ignore
+   GAN_AFTER: int = args.gan_after # type: ignore
 
    AVG_EVERY  = 100
    PLOT_EVERY = 500
@@ -115,10 +123,17 @@ def train():
    SAVE_EVERY = 10000
 
    model = VQModel()
-   lpips = LPIPS().load_from_pretrained()
-   gan   = NLayerDiscriminator(input_nc=1)
+   train_params = list(set(get_parameters(model)))
+   shard_params = train_params.copy()
 
-   params = list(set(get_parameters(model))) + list(set(get_parameters(gan)))
+   if PRC_LOSS:
+      lpips = LPIPS().load_from_pretrained()
+      shard_params += get_parameters(lpips)
+
+   if GAN_LOSS:
+      gan = NLayerDiscriminator(input_nc=1)
+      train_params += (params := get_parameters(gan))
+      shard_params +=  params
 
    @dataclass
    class TrainInfo:
@@ -143,10 +158,10 @@ def train():
    else:
       info = TrainInfo()
 
-   for w in params + get_parameters(lpips):
+   for w in shard_params:
       w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
 
-   optim = AdamW(params, lr=LEARNING_RATE)
+   optim = AdamW(train_params, lr=LEARNING_RATE)
 
    __weights_folder = f"weights/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
    def save_path(*paths:str) -> str:
@@ -162,19 +177,27 @@ def train():
       pred_x = model.dec(token_probs, as_min_encodings=True)
 
       rec_loss = (init_x - pred_x).abs().mean()
-      prc_loss = lpips(init_x, pred_x)
-      nll_loss = Tensor.mean(rec_loss + (prc_loss * rec_loss))
-      gan_mult = gan_mult.reshape(tuple()).to(init_x.device)
-      gan_loss = gan_mult * hinge_d_loss(gan(init_x.detach()), gan(pred_x.detach()))
-      dsc_loss = gan_mult * gan(pred_x).mean().mul(-1.0)
+      losses = { "rec": rec_loss }
 
-      loss = (nll_loss + gan_loss + dsc_loss).realize()
+      if PRC_LOSS:
+         prc_loss = lpips(init_x, pred_x)
+         nll_loss = Tensor.mean(rec_loss + (prc_loss * rec_loss))
+         losses["nll"] = nll_loss
+
+      if GAN_LOSS:
+         gan_mult = gan_mult.reshape(tuple()).to(init_x.device)
+         gan_loss = gan_mult * hinge_d_loss(gan(init_x.detach()), gan(pred_x.detach()))
+         dsc_loss = gan_mult * gan(pred_x).mean().mul(-1.0)
+         losses["gan"] = gan_loss
+         losses["dsc"] = dsc_loss
+
+      loss = sum(losses.values()).realize()
       optim.zero_grad()
       loss.backward()
       optim.step()
 
-      losses = { "all":loss, "rec":rec_loss, "nll":nll_loss, "gan":gan_loss, "dsc":dsc_loss }
-      return loss.realize(), { k: l.realize() for k,l in losses.items() }
+      losses["all"] = loss
+      return loss, { k: l.realize() for k,l in losses.items() }
 
    eval_inputs = get_random_batch(len(GPUS))
    eval_input = Tensor(eval_inputs).shard(GPUS)
