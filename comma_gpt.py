@@ -77,5 +77,28 @@ class GPT:
       logits = self.lm_head(x)
       return logits
 
-   def decode_one_token(self, x:Tensor):
+   def decode_one_token(self, x:Tensor) -> Tensor:
       return self(x).argmax(axis=-1)
+
+if __name__ == "__main__":
+   from tinygrad import Device
+   from tinygrad.helpers import fetch
+   from tinygrad.nn.state import load_state_dict, torch_load
+   from vqvae import Decoder
+   import numpy as np
+
+   gpt = GPT()
+
+   state_dict = torch_load(str(fetch("https://huggingface.co/commaai/commavq-gpt2m/resolve/main/pytorch_model.bin?download=true", "comma_gpt.bin")))
+   for k, w in state_dict.items():
+      if k.endswith(".c_proj.weight") or k.endswith(".c_attn.weight") or k.endswith(".c_fc.weight"):
+         state_dict[k] = w.to(Device.DEFAULT).T
+   load_state_dict(gpt, state_dict)
+
+   tokens  = np.load("tokens.npy").astype(np.int64)
+
+   x_in = Tensor(tokens[:5])
+   x_out = gpt.decode_one_token(x_in)
+   print(x_out.shape)
+
+   # decoder = Decoder().load_from_pretrained()
