@@ -234,8 +234,8 @@ class Encoder:
       _, encoding_indices = self.quantize(h)
       return encoding_indices
 
-   def load_from_pretrained(self, url='https://huggingface.co/commaai/commavq-gpt2m/resolve/main/encoder_pytorch_model.bin') -> 'Encoder':
-      load_state_dict(self, torch_load(str(fetch(url))))
+   def load_from_pretrained(self, url='https://huggingface.co/commaai/commavq-gpt2m/resolve/main/encoder_pytorch_model.bin', name:str='commavq_encoder.bin') -> 'Encoder':
+      load_state_dict(self, torch_load(str(fetch(url, name))))
       return self
 
 class Decoder:
@@ -320,8 +320,8 @@ class Decoder:
       # scale
       return ((h + 1.0) / 2.0) * 255.
 
-   def load_from_pretrained(self, url='https://huggingface.co/commaai/commavq-gpt2m/resolve/main/decoder_pytorch_model.bin') -> 'Decoder':
-      load_state_dict(self, torch_load(str(fetch(url))))
+   def load_from_pretrained(self, url='https://huggingface.co/commaai/commavq-gpt2m/resolve/main/decoder_pytorch_model.bin', name:str='commavq_decoder.bin') -> 'Decoder':
+      load_state_dict(self, torch_load(str(fetch(url, name))))
       return self
 
 def transpose_and_clip(x:Tensor) -> Tensor:
