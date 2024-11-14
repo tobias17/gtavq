@@ -103,18 +103,23 @@ if __name__ == "__main__":
    #       state_dict[k] = w.to(Device.DEFAULT).T
    load_state_dict(gpt, state_dict)
 
-   tokens  = np.load("tokens.npy").astype(np.int64)
+   tokens = Tensor(np.load("tokens.npy").astype(np.int64)[:5])
+   x_in = tokens.pad((None,(1,0)), value=gpt.config.bos_token).reshape(1, -1)
 
-   x_in = Tensor(tokens[:5])
    for _ in tqdm(range(5)):
-      x_out = gpt.decode_one_token(x_in)
-      x_in = x_in.cat(x_out[-1:])
+      x_in = x_in.pad((None,(0,1)), value=gpt.config.bos_token)
+      for _ in range(gpt.config.tokens_per_frame - 1):
+         x_out = gpt.decode_one_token(x_in)
+         x_in = x_in.cat(x_out[:,-1:], dim=-1)
    print(x_in.shape)
 
-   decoder = Decoder().load_from_pretrained()
-   frames = transpose_and_clip(decoder(x_in)).numpy()
-   
+   tokens = x_in.reshape(-1, gpt.config.tokens_per_frame)
+   tokens = tokens.shrink((None,(1,gpt.config.tokens_per_frame)))
+
    tmp_root = "/tmp/frames"
    os.makedirs(tmp_root, exist_ok=True)
-   for i in range(frames.shape[0]):
-      Image.fromarray(frames[i]).save(f"{tmp_root}/frame{i}.png")
+
+   decoder = Decoder().load_from_pretrained()
+   for i in tqdm(range(10)):
+      frame = decoder(tokens[i:i+1]).numpy()
+      Image.fromarray(transpose_and_clip(frame)).save(f"{tmp_root}/frame{i}.png")
