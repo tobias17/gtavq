@@ -7,10 +7,12 @@ from PIL import Image
 from threading import Thread
 import time
 
+START_AFTER = 10
 BATCH_SIZE = 24
 MAX_PER = BATCH_SIZE * 10
 
-OUT_ROOT  = f"/net/tiny/raid/datasets/depthvq"
+# OUT_ROOT = f"/net/tiny/raid/datasets/depthvq"
+OUT_ROOT = "."
 
 def get_filepath_for(out_root:str, index:int) -> str:
    return f"{out_root}/{index:04d}.png"
@@ -37,6 +39,8 @@ def main():
       return decoder(t).realize()
 
    for split_key, split in dataset.items():
+      if START_AFTER >= 0 and split_key in [f"{i}" for i in range(START_AFTER+1)]:
+         continue
       print((banner := "\n"+"="*80+"\n\n") + f"Starting split '{split_key}'" + banner[::-1])
       for filepath in split["path"]:
          tokens = np.load(filepath).astype(np.int64)

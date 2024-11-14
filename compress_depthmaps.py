@@ -12,8 +12,8 @@ assert os.path.exists(os.path.dirname(OUT_ROOT))
 AMOUNT_PER = 240
 
 def main():
-   for splitdir in os.listdir(IN_ROOT):
-      for scenedir in os.listdir(f"{IN_ROOT}/{splitdir}"):
+   for splitdir in sorted(os.listdir(IN_ROOT)):
+      for scenedir in sorted(os.listdir(f"{IN_ROOT}/{splitdir}")):
          try:
             out_folder = f"{OUT_ROOT}/{splitdir}"
             out_file = f"{out_folder}/{scenedir}.npy"
