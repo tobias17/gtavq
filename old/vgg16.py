@@ -48,8 +48,8 @@ class vgg16:
          nn.Linear(in_features=4096, out_features=1000, bias=True),
       ]
    
-   def load_from_pretrained(self, url:str="https://download.pytorch.org/models/vgg16-397923af.pth") -> 'vgg16':
-      load_state_dict(self, torch_load(str(fetch(url))))
+   def load_from_pretrained(self, url:str="https://download.pytorch.org/models/vgg16-397923af.pth", name:str="vgg16.pth") -> 'vgg16':
+      load_state_dict(self, torch_load(str(fetch(url, name))))
       return self
 
 if __name__ == "__main__":

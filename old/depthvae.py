@@ -7,10 +7,11 @@ from vqvae import Encoder, Decoder
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
-from threading import Thread, Event
-from queue import Queue
 import os, time, datetime, random, json, argparse
-from typing import List, Dict
+from typing import List, Dict, Tuple
+
+from lpips import LPIPS
+from discriminator import NLayerDiscriminator, hinge_d_loss
 
 # class CompressorConfig:
 #    in_channels:  int = 1
@@ -76,14 +77,6 @@ def get_random_batch(batch_size:int) -> np.ndarray:
       frames.append(mmap[indices[i]])
    return np.stack(frames)
 
-kill_event = Event()
-def prefetch_batches(queue:Queue, batch_size:int, max_size:int=4):
-   while not kill_event.is_set():
-      if queue.qsize() >= max_size:
-         time.sleep(0.05)
-         continue
-      queue.put(get_random_batch(batch_size))
-
 def underscore_number(value:int) -> str:
    text = ""
    for magnitude in [1_000_000, 1_000]:
@@ -100,20 +93,29 @@ def seed_all(seed:int):
 
 def train():
    parser = argparse.ArgumentParser()
+   parser.add_argument('-p', '--prc-loss', action='store_true')
+   parser.add_argument('-g', '--gan-loss', action='store_true')
+   parser.add_argument('-a', '--gan-after', type=int, default=2000)
    parser.add_argument('-r', '--restore', type=str)
    args = parser.parse_args()
 
    Tensor.training = True
    seed_all(42)
 
-   LEARNING_RATE = 2**-21
+   LEARNING_RATE = 2**-16
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
-   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
-   DEVICE_BS = 64
+   # GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
+   # DEVICE_BS = 48
+   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(4)]
+   DEVICE_BS = 32
    GLOBAL_BS = DEVICE_BS * len(GPUS)
+
+   PRC_LOSS: bool = args.prc_loss  # type: ignore
+   GAN_LOSS: bool = args.gan_loss  # type: ignore
+   GAN_AFTER: int = args.gan_after # type: ignore
 
    AVG_EVERY  = 100
    PLOT_EVERY = 500
@@ -121,17 +123,31 @@ def train():
    SAVE_EVERY = 10000
 
    model = VQModel()
-   params = set(get_parameters(model))
+   train_params = list(set(get_parameters(model)))
+   shard_params = train_params.copy()
+
+   if PRC_LOSS:
+      lpips = LPIPS().load_from_pretrained()
+      shard_params += get_parameters(lpips)
+
+   if GAN_LOSS:
+      gan = NLayerDiscriminator(input_nc=1)
+      train_params += (params := get_parameters(gan))
+      shard_params +=  params
 
    @dataclass
    class TrainInfo:
       step_i = 0
-      losses = []
+      losses = {}
       prev_weights = None
-      def to_json(self): return asdict(self)
+      def to_json(self): return {
+         "step_i":self.step_i,
+         "losses":self.losses,
+         "prev_weights":self.prev_weights,
+      }
       @staticmethod
       def from_json(data:Dict) -> 'TrainInfo': return TrainInfo(**data)
-   
+
    if args.restore:
       assert os.path.exists(args.restore), f"failed to find restore root, searched for {args.restore}"
       data_filepath = os.path.join(args.restore, "data.json")
@@ -142,10 +158,10 @@ def train():
    else:
       info = TrainInfo()
 
-   for w in params:
+   for w in shard_params:
       w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
 
-   optim = AdamW(params, lr=LEARNING_RATE)
+   optim = AdamW(train_params, lr=LEARNING_RATE)
 
    __weights_folder = f"weights/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
    def save_path(*paths:str) -> str:
@@ -156,23 +172,36 @@ def train():
       return os.path.join(final_folder, paths[-1])
 
    @TinyJit
-   def train_step(init_x:Tensor) -> Tensor:
+   def train_step(init_x:Tensor, gan_mult:Tensor) -> Tuple[Tensor,Dict[str,Tensor]]:
       token_probs = model.enc(init_x)
       pred_x = model.dec(token_probs, as_min_encodings=True)
 
-      loss = (init_x - pred_x).abs().mean().realize()
+      rec_loss = (init_x - pred_x).abs().mean()
+      losses = { "rec": rec_loss }
+
+      if PRC_LOSS:
+         prc_loss = lpips(init_x, pred_x)
+         nll_loss = Tensor.mean(prc_loss * rec_loss)
+         losses["nll"] = nll_loss
+
+      if GAN_LOSS:
+         gan_mult = gan_mult.reshape(tuple()).to(init_x.device)
+         gan_loss = gan_mult * hinge_d_loss(gan(init_x.detach()), gan(pred_x.detach()))
+         dsc_loss = gan_mult * gan(pred_x).mean().mul(-1.0)
+         losses["gan"] = gan_loss
+         losses["dsc"] = dsc_loss
+
+      loss = sum(losses.values()).realize()
       optim.zero_grad()
       loss.backward()
       optim.step()
 
-      return loss.realize()
+      losses["all"] = loss
+      return loss, { k: l.realize() for k,l in losses.items() }
 
    eval_inputs = get_random_batch(len(GPUS))
    eval_input = Tensor(eval_inputs).shard(GPUS)
    curr_losses = []
-
-   # queue = Queue()
-   # Thread(target=prefetch_batches, args=(queue,GLOBAL_BS,4)).start()
 
    s_t = time.perf_counter()
    while True:
@@ -182,24 +211,30 @@ def train():
       assert init_x.shape[0] == GLOBAL_BS, f"{init_x.shape[0]=}, expected BS={GLOBAL_BS}"
       l_t = time.perf_counter()
 
+      gan_mult = 0.0 if (info.step_i < GAN_AFTER) else 0.1
       with Context(BEAM=BEAM_VALUE):
-         loss = train_step(init_x)
+         loss, losses = train_step(init_x, Tensor([gan_mult]).realize())
 
-      curr_losses.append(loss.item())
+      curr_losses.append({k:l.item() for k,l in losses.items()})
       info.step_i += 1
 
       if info.step_i % AVG_EVERY == 0:
-         info.losses.append(sum(curr_losses) / len(curr_losses))
+         for k in curr_losses[0]:
+            if k not in info.losses:
+               info.losses[k] = []
+            info.losses[k].append(sum(l[k] for l in curr_losses) / len(curr_losses))
          curr_losses = []
 
       if info.step_i % PLOT_EVERY == 0:
-         plt.clf()
-         plt.plot(np.arange(1, len(info.losses)+1)*GLOBAL_BS*AVG_EVERY, info.losses)
-         plt.ylim((0,None))
-         plt.title("Loss")
-         fig = plt.gcf()
-         fig.set_size_inches(18, 10)
-         plt.savefig(save_path("graph_loss.png"))
+         for k in info.losses:
+            plt.clf()
+            plt.plot(np.arange(1, len(info.losses[k])+1)*GLOBAL_BS*AVG_EVERY, info.losses[k])
+            if not (k == "dsc" or (k == "all" and "dsc" in info.losses)):
+               plt.ylim((0,None))
+            plt.title("Loss")
+            fig = plt.gcf()
+            fig.set_size_inches(18, 10)
+            plt.savefig(save_path(f"graph_loss_{k}.png"))
 
       if info.step_i % SAVE_EVERY == 0:
          curr_weights = save_path(f"weights_{underscore_number(info.step_i)}.st")
@@ -226,7 +261,4 @@ def train():
       s_t = e_t
 
 if __name__ == "__main__":
-   try:
-      train()
-   except Exception:
-      kill_event.set()
+   train()
