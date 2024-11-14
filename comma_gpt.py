@@ -88,6 +88,7 @@ class GPT:
       return self(x).argmax(axis=-1)
 
 if __name__ == "__main__":
+   from tinygrad import TinyJit, dtypes
    from tinygrad.helpers import fetch, tqdm
    from tinygrad.nn.state import load_state_dict, torch_load
    from vqvae import Decoder, transpose_and_clip
@@ -96,30 +97,37 @@ if __name__ == "__main__":
    import os
 
    gpt = GPT()
+   MAX_SIZE = gpt.config.block_size
 
    state_dict = torch_load(str(fetch("https://huggingface.co/commaai/commavq-gpt2m/resolve/main/pytorch_model.bin?download=true", "comma_gpt.bin")))
-   # for k, w in state_dict.items():
-   #    if k.endswith(".c_proj.weight") or k.endswith(".c_attn.weight") or k.endswith(".c_fc.weight"):
-   #       state_dict[k] = w.to(Device.DEFAULT).T
    load_state_dict(gpt, state_dict)
 
    tokens = Tensor(np.load("tokens.npy").astype(np.int64)[:5])
-   x_in = tokens.pad((None,(1,0)), value=gpt.config.bos_token).reshape(1, -1)
+   x_in = tokens.pad((None,(1,0)), value=MAX_SIZE).reshape(1, -1)
 
-   for _ in tqdm(range(5)):
-      x_in = x_in.pad((None,(0,1)), value=gpt.config.bos_token)
-      for _ in range(gpt.config.tokens_per_frame - 1):
-         x_out = gpt.decode_one_token(x_in)
-         x_in = x_in.cat(x_out[:,-1:], dim=-1)
+   @TinyJit
+   def decode_step(x:Tensor) -> Tensor:
+      return gpt.decode_one_token(x).realize()
+
+   pointer = x_in.shape[1]
+   x_in = x_in.pad((None,(0,MAX_SIZE-x_in.shape[1])))
+   for _ in range(5):
+      pad_arg = ((pointer-1,MAX_SIZE-pointer),)
+      x_in = x_in * Tensor([0]).pad(pad_arg, value=1) + Tensor([gpt.config.bos_token]).pad(pad_arg)
+      pointer += 1
+      for _ in tqdm(range(gpt.config.tokens_per_frame - 1)):
+         x_out = decode_step(x_in.realize())
+         x_in[:,pointer] = x_out[:,pointer]
+         pointer += 1
    print(x_in.shape)
 
    tokens = x_in.reshape(-1, gpt.config.tokens_per_frame)
    tokens = tokens.shrink((None,(1,gpt.config.tokens_per_frame)))
 
+   decoder = Decoder().load_from_pretrained()
+   frames = transpose_and_clip(decoder(tokens)).numpy()
+
    tmp_root = "/tmp/frames"
    os.makedirs(tmp_root, exist_ok=True)
-
-   decoder = Decoder().load_from_pretrained()
    for i in tqdm(range(10)):
-      frame = decoder(tokens[i:i+1]).numpy()
-      Image.fromarray(transpose_and_clip(frame)).save(f"{tmp_root}/frame{i}.png")
+      Image.fromarray(frames[i]).save(f"{tmp_root}/frame{i}.png")
