@@ -1,7 +1,8 @@
 from tinygrad import Tensor, nn
 
 class DepthGptConfig:
-   max_context: int = 20
+   max_context: int = 16
+   max_size: int = 128
    frame_vocab: int = 1024
    depth_vocab: int = 256
    n_layer: int = 12
@@ -58,16 +59,19 @@ class TransformerBlock:
 class GPT:
    def __init__(self, config=DepthGptConfig()):
       self.config = config
-      self.frame_embed = nn.Embedding(config.frame_vocab)
-      self.depth_embed = nn.Embedding(config.depth_vocab)
-      self.time_embed  = nn.Embedding(config.max_context)
+      self.frame_embed = nn.Embedding(config.frame_vocab, config.dim)
+      self.depth_embed = nn.Embedding(config.depth_vocab, config.dim)
+      self.pos_c_embed = nn.Embedding(config.max_context, config.dim)
+      self.pos_s_embed = nn.Embedding(config.max_size, config.dim)
       self.layers      = [TransformerBlock(config) for _ in range(config.n_layer)]
       self.ln_f        = nn.LayerNorm(config.dim)
       self.lm_head     = nn.Linear(config.dim, config.frame_vocab, bias=False)
 
    def __call__(self, frames:Tensor, depths:Tensor) -> Tensor:
       assert frames.shape == depths.shape and len(frames.shape) == 3
-      x = self.frame_embed(frames) + self.depth_embed(depths) + self.time_embed(Tensor.arange(frames.shape[1]))
+      pos_c = self.pos_c_embed(Tensor.arange(frames.shape[1]).reshape(1,-1,1))
+      pos_s = self.pos_s_embed(Tensor.arange(frames.shape[2]).reshape(1,1,-1))
+      x = self.frame_embed(frames) + self.depth_embed(depths) + pos_c + pos_s
       x = x.sequential(self.layers)
       x = self.ln_f(x)
       return self.lm_head(x)
