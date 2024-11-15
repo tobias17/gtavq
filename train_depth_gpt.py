@@ -1,11 +1,14 @@
-from tinygrad import Tensor
-from tinygrad.helpers import prod
+from tinygrad import Tensor, TinyJit, Device, dtypes
+from tinygrad.helpers import prod, BEAM, Context
 from tinygrad.nn.optim import AdamW
-from tinygrad.nn.state import get_parameters
+from tinygrad.nn.state import get_parameters, safe_save, get_state_dict
 from depth_gpt import GPT
-import json, os, math, random
+from util import seed_all, underscore_number
+import json, os, math, random, time, datetime
 import numpy as np
 from typing import List
+from dataclasses import dataclass
+import matplotlib.pyplot as plt
 
 DATASET_ROOT = "/raid/datasets/depthvq/batched"
 class Dataset:
@@ -14,7 +17,7 @@ class Dataset:
    def __init__(self, frame_count:int):
       index_filepath = os.path.join(DATASET_ROOT, "index.json")
       amnt_per = math.ceil(frame_count / 20)
-      print(f"Amount per: {amnt_per}")
+      # print(f"Amount per: {amnt_per}")
       if not os.path.exists(index_filepath):
          data = []
          for split_name in sorted(os.listdir(DATASET_ROOT)):
@@ -53,39 +56,112 @@ class Dataset:
          depths_np = np.concatenate(depths_l)
          assert frames_np.shape[0] >= self.frame_count
          assert frames_np.shape == depths_np.shape
-         frame_accum.append(frames_np)
-         depth_accum.append(depths_np)
+         frame_accum.append(frames_np[:self.frame_count])
+         depth_accum.append(depths_np[:self.frame_count])
 
          self.pointer += 1
          if self.pointer >= len(self.data):
             self.pointer = 0
       return Tensor(np.stack(frame_accum)), Tensor(np.stack(depth_accum))
 
-def seed_all(seed:int):
-   Tensor.manual_seed(seed)
-   np.random.seed(seed)
-
 def train():
+   Tensor.training = True
    seed_all(42)
 
-   GLOBAL_BS = 4
-   LR = 2**-16
+   LEARNING_RATE = 2**-16
+   TRAIN_DTYPE = dtypes.float32
+   BEAM_VALUE  = BEAM.value
+   BEAM.value  = 0
+
+   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(2)]
+   DEVICE_BS = 4
+   GLOBAL_BS = DEVICE_BS * len(GPUS)
+
+   AVG_EVERY  = 10
+   PLOT_EVERY = 50
+   SAVE_EVERY = 1000
 
    model = GPT()
    params = get_parameters(model)
-   optim = AdamW(params)
-
-   dataset = Dataset(model.config.max_context+1)
-
    print(f"Parmeters: {int(sum(prod(p.shape) for p in params) * 1e-6)}m")
 
-   for _ in range(1):
+   __weights_folder = f"weights/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
+   def save_path(*paths:str) -> str:
+      assert len(paths) > 0
+      final_folder = os.path.join(__weights_folder, *paths[:-1])
+      if not os.path.exists(final_folder):
+         os.makedirs(final_folder)
+      return os.path.join(final_folder, paths[-1])
+
+   @dataclass
+   class TrainInfo:
+      step_i = 0
+      losses = []
+      prev_weights = None
+      def to_json(self): return {
+         "step_i":self.step_i,
+         "losses":self.losses,
+         "prev_weights":self.prev_weights,
+      }
+      @staticmethod
+      def from_json(data) -> 'TrainInfo': return TrainInfo(**data)
+   info = TrainInfo()
+
+   for w in params:
+      w.replace(w.shard(GPUS).cast(TRAIN_DTYPE)).realize()
+   optim = AdamW(params, lr=LEARNING_RATE)
+
+   @TinyJit
+   def train_step(frames:Tensor, depths:Tensor) -> Tensor:
+      logits = model(frames[:,:-1], depths[:,1:]).realize()
+
+      loss = logits.sparse_categorical_crossentropy(frames[:,1:]).realize()
+      optim.zero_grad()
+      loss.backward()
+      optim.step()
+
+      return loss.realize()
+
+   dataset = Dataset(model.config.max_context+1)
+   curr_losses = []
+
+   m = 1e3
+   s_t = time.time()
+   while True:
       frames, depths = dataset.next(GLOBAL_BS)
-      print(frames.shape)
-      print(depths.shape)
+      with Context(BEAM=BEAM_VALUE):
+         loss = train_step(frames.shard(GPUS, axis=0).realize(), depths.shard(GPUS, axis=0).realize())
 
+      curr_losses.append(loss_item := loss.item())
+      info.step_i += 1
 
-   # logits = model(Tensor.randint(2,10,128,high=128), Tensor.randint(2,10,128,high=128)).realize()
+      if info.step_i % AVG_EVERY == 0:
+         info.losses.append(sum(curr_losses) / len(curr_losses))
+         curr_losses = []
+
+      if info.step_i % PLOT_EVERY == 0:
+         for k in info.losses:
+            plt.clf()
+            plt.plot(np.arange(1, len(info.losses[k])+1)*GLOBAL_BS*AVG_EVERY, info.losses[k])
+            if not (k == "dsc" or (k == "all" and "dsc" in info.losses)):
+               plt.ylim((0,None))
+            plt.title("Loss")
+            fig = plt.gcf()
+            fig.set_size_inches(18, 10)
+            plt.savefig(save_path(f"graph_loss_{k}.png"))
+
+      if info.step_i % SAVE_EVERY == 0:
+         curr_weights = save_path(f"weights_{underscore_number(info.step_i)}.st")
+         safe_save(get_state_dict(model), curr_weights)
+         if info.prev_weights is not None:
+            os.remove(info.prev_weights)
+         info.prev_weights = curr_weights
+         with open(save_path("data.json"), "w") as f:
+            json.dump(info.to_json(), f)
+
+      e_t = time.time()
+      print(f"{info.step_i:04d}: {(e_t-s_t)*m:.1f} ms step, {loss_item:.4f} loss")
+      s_t = e_t
 
 
 if __name__ == "__main__":
