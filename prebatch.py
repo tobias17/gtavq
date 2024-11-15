@@ -22,7 +22,7 @@ def main():
 
    dataset = load_dataset("/home/tobi/datasets/commavq", trust_remote_code=True)
    for split_key, split in dataset.items():
-      print((banner := "\n"+"="*80+"\n\n") + f"Starting split '{split_key}'" + banner[::-1])
+      print(f"Starting split '{split_key}'")
       for filepath in tqdm(split["path"]):
          filename = os.path.basename(filepath)
          scene_folder = filename.split(".")[0]
@@ -37,7 +37,11 @@ def main():
                   depthmap_path = os.path.join(DEPTHMAP_ROOT, split_key, scene_folder, f"{start_i+frame_i:04d}.png")
                   if not os.path.exists(depthmap_path):
                      break
-                  depthmaps.append(to_input(Image.open(depthmap_path)).cuda())
+                  try:
+                     depthmaps.append(to_input(Image.open(depthmap_path)).cuda())
+                  except Exception as ex:
+                     print(f"Ran into error loading {depthmap_path}: {ex}")
+                     break
                else:
                   x_in = torch.cat(depthmaps)
                   with torch.no_grad():
