@@ -69,8 +69,8 @@ class GPT:
 
    def __call__(self, frames:Tensor, depths:Tensor) -> Tensor:
       assert frames.shape == depths.shape and len(frames.shape) == 3
-      pos_c = self.pos_c_embed(Tensor.arange(frames.shape[1]).reshape(1,-1,1))
-      pos_s = self.pos_s_embed(Tensor.arange(frames.shape[2]).reshape(1,1,-1))
+      pos_c = self.pos_c_embed(Tensor.arange(frames.shape[1], device=frames.device).reshape(1,-1,1))
+      pos_s = self.pos_s_embed(Tensor.arange(frames.shape[2], device=frames.device).reshape(1,1,-1))
       x = self.frame_embed(frames) + self.depth_embed(depths) + pos_c + pos_s
       x = x.sequential(self.layers)
       x = self.ln_f(x)

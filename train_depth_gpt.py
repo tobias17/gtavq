@@ -68,18 +68,18 @@ def train():
    Tensor.training = True
    seed_all(42)
 
-   LEARNING_RATE = 2**-16
+   LEARNING_RATE = 2**-18
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
-   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(2)]
-   DEVICE_BS = 4
+   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
+   DEVICE_BS = 6
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
-   AVG_EVERY  = 10
-   PLOT_EVERY = 50
-   SAVE_EVERY = 1000
+   AVG_EVERY  = 100
+   PLOT_EVERY = 500
+   SAVE_EVERY = 10000
 
    model = GPT()
    params = get_parameters(model)
@@ -140,20 +140,18 @@ def train():
          curr_losses = []
 
       if info.step_i % PLOT_EVERY == 0:
-         for k in info.losses:
-            plt.clf()
-            plt.plot(np.arange(1, len(info.losses[k])+1)*GLOBAL_BS*AVG_EVERY, info.losses[k])
-            if not (k == "dsc" or (k == "all" and "dsc" in info.losses)):
-               plt.ylim((0,None))
-            plt.title("Loss")
-            fig = plt.gcf()
-            fig.set_size_inches(18, 10)
-            plt.savefig(save_path(f"graph_loss_{k}.png"))
+         plt.clf()
+         plt.plot(np.arange(1, len(info.losses)+1)*GLOBAL_BS*AVG_EVERY, info.losses)
+         plt.ylim((0,None))
+         plt.title("Loss")
+         fig = plt.gcf()
+         fig.set_size_inches(18, 10)
+         plt.savefig(save_path(f"graph_loss.png"))
 
       if info.step_i % SAVE_EVERY == 0:
          curr_weights = save_path(f"weights_{underscore_number(info.step_i)}.st")
          safe_save(get_state_dict(model), curr_weights)
-         if info.prev_weights is not None:
+         if info.prev_weights is not None and os.path.exists(info.prev_weights):
             os.remove(info.prev_weights)
          info.prev_weights = curr_weights
          with open(save_path("data.json"), "w") as f:
