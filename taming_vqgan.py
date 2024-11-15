@@ -1,9 +1,9 @@
-import os, sys
+import sys
 sys.path.append("../taming-transformers")
 import main
 from taming.models.vqgan import VQModel
 import numpy as np
-import torch, torchvision
+import torch # type: ignore
 from PIL import Image
 
 def load_taming_vqgan():
@@ -50,7 +50,10 @@ if __name__ == "__main__":
 
    x_in = to_input(Image.open("./img_depth.png"))
    with torch.no_grad():
-      quant, _, _ = model.encode(x_in)
-      print(quant.shape)
-      x_out = model.decode(quant)
+      quant, _, (_, _, min_indices) = model.encode(x_in)
+      z_q = model.quantize.embedding(min_indices)
+      print(min_indices.shape, z_q.shape, quant.shape)
+      diff = z_q - quant.reshape(256,128).permute(1,0)
+      print(diff.max(), diff.min())
+      x_out = model.decode(z_q.permute(1,0).reshape(1,256,8,16))
    from_output(x_out).show()
