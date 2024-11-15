@@ -35,7 +35,8 @@ def to_input(im:Image.Image) -> torch.Tensor:
    x = torch.Tensor(np.array(im)).cuda().float()
    x = x.reshape(1, *x.shape, 1)
    x = x.permute(0, 3, 1, 2).to(memory_format=torch.contiguous_format)
-   return (x / 127.0) - 1.0
+   x = (x / 127.0) - 1.0
+   return x
 
 def from_output(x:torch.Tensor) -> Image.Image:
    x = x[0]
