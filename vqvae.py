@@ -350,8 +350,8 @@ if __name__ == "__main__":
    #    return decoder(t).realize()
 
    decoded_1 = decoder(Tensor(tokens[0]).reshape(1,-1).realize()).realize()
-   encoded_1 = encoder(decoded_1).realize()
-   decoded_2 = decoder(encoded_1, as_min_encodings=True).realize()
+   encoded_1 = encoder(decoded_1).argmax(axis=-1).realize()
+   decoded_2 = decoder(encoded_1).realize()
 
    from PIL import Image
    for img in [decoded_1, decoded_2]:
