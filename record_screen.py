@@ -1,9 +1,7 @@
-import win32gui, win32ui, win32con
+import win32gui, win32ui, win32con # type: ignore
 from PIL import Image
-import numpy as np
-import cv2
 
-def capture_window(window_title:str) -> np.ndarray:
+def capture_window(window_title:str) -> Image.Image:
    hwnd = win32gui.FindWindow(None, window_title)
    if not hwnd:
       raise Exception(f"Window '{window_title}' not found!")
@@ -30,7 +28,7 @@ def capture_window(window_title:str) -> np.ndarray:
    mfc_dc.DeleteDC()
    win32gui.ReleaseDC(hwnd, hwnd_dc)
 
-   return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+   return img
 
 def list_window_titles():
    def callback(hwnd, windows):
@@ -60,6 +58,4 @@ if __name__ == "__main__":
    if args.window_title == "list":
       list_window_titles()
    else:
-      im = capture_window(args.window_title)
-      cv2.imshow("frame", im)
-      cv2.waitKey()
+      capture_window(args.window_title).show()
