@@ -1,6 +1,6 @@
 from tinygrad import Tensor
 import numpy as np
-import random
+import random, os
 
 def underscore_number(value:int) -> str:
    text = ""
@@ -15,3 +15,10 @@ def seed_all(seed:int):
    Tensor.manual_seed(seed)
    np.random.seed(seed)
    random.seed(seed)
+
+def get_latest_weights_path(ext:str=".st") -> str:
+   ROOT = "weights"
+   folders = [os.path.join(ROOT, f) for f in os.listdir(ROOT)]
+   latest = max(folders, key=os.path.getmtime)
+   files = [os.path.join(latest, f) for f in os.listdir(latest) if f.endswith(ext)]
+   return max(files, key=os.path.getmtime)

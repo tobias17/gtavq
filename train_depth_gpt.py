@@ -1,12 +1,12 @@
 from tinygrad import Tensor, TinyJit, Device, dtypes
-from tinygrad.helpers import prod, BEAM, Context
+from tinygrad.helpers import prod, BEAM, Context, tqdm
 from tinygrad.nn.optim import AdamW
 from tinygrad.nn.state import get_parameters, safe_save, get_state_dict
 from depth_gpt import GPT
-from util import seed_all, underscore_number
+from util import seed_all, underscore_number, get_latest_weights_path
 import json, os, math, random, time, datetime
 import numpy as np
-from typing import List
+from typing import List, Tuple
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
 
@@ -42,7 +42,7 @@ class Dataset:
       with open(index_filepath, "r") as f:
          self.data = json.load(f)
 
-   def next(self, batches:int):
+   def next(self, batches:int) -> Tuple[Tensor,Tensor]:
       frame_accum, depth_accum = [], []
       for _ in range(batches):
          filepaths = self.data[self.pointer]
@@ -77,9 +77,9 @@ def train():
    DEVICE_BS = 6
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
-   AVG_EVERY  = 100
+   AVG_EVERY  = 50
    PLOT_EVERY = 500
-   SAVE_EVERY = 10000
+   SAVE_EVERY = 4000
 
    model = GPT()
    params = get_parameters(model)
@@ -122,7 +122,8 @@ def train():
 
       return loss.realize()
 
-   dataset = Dataset(model.config.max_context+1)
+   FRAMES_COUNT = model.config.max_context + 1
+   dataset = Dataset(FRAMES_COUNT)
    curr_losses = []
 
    m = 1e3
@@ -141,7 +142,7 @@ def train():
 
       if info.step_i % PLOT_EVERY == 0:
          plt.clf()
-         plt.plot(np.arange(1, len(info.losses)+1)*GLOBAL_BS*AVG_EVERY, info.losses)
+         plt.plot(np.arange(1, len(info.losses)+1)*GLOBAL_BS*AVG_EVERY*FRAMES_COUNT, info.losses)
          plt.ylim((0,None))
          plt.title("Loss")
          fig = plt.gcf()
@@ -161,6 +162,50 @@ def train():
       print(f"{info.step_i:04d}: {(e_t-s_t)*m:.1f} ms step, {loss_item:.4f} loss")
       s_t = e_t
 
+def test():
+   from tinygrad.nn.state import safe_load, load_state_dict
+   from vqvae import Decoder, transpose_and_clip
+   from PIL import Image
+
+   Tensor.training = True
+   Tensor.no_grad  = True
+   seed_all(42)
+
+   model = GPT()
+   weights_path = get_latest_weights_path()
+   print(f"Loading weights from: {weights_path}")
+   load_state_dict(model, safe_load(weights_path))
+   dataset = Dataset(model.config.max_context+1)
+
+   INPUT_SIZE = 4
+   GEN_COUNT  = model.config.max_context - INPUT_SIZE - 1
+
+   frames, depths = dataset.next(1)
+
+   curr_size = INPUT_SIZE
+   x_in = frames[:,:INPUT_SIZE]
+   for _ in tqdm(range(GEN_COUNT)):
+      logits = model(x_in, depths[:,1:curr_size+1]).realize()
+      next_frame = logits[:,-1:].argmax(axis=-1)
+      x_in = x_in.cat(next_frame, dim=1).realize()
+      curr_size += 1
+      assert x_in.shape[1] == curr_size
+
+   decoder = Decoder().load_from_pretrained()
+   in_frames  = transpose_and_clip(decoder(frames.squeeze(0))).numpy()
+   out_frames = transpose_and_clip(decoder(x_in.squeeze(0))).numpy()
+   for i in range(INPUT_SIZE + GEN_COUNT):
+      Image.fromarray(in_frames[i]).save(f"frames/real_{i:02d}.png")
+      Image.fromarray(out_frames[i]).save(f"frames/gen_{i:02d}_{'r' if i < INPUT_SIZE else 'f'}.png")
 
 if __name__ == "__main__":
-   train()
+   func_map = {
+      "train": train,
+      "test":  test,
+   }
+
+   import argparse
+   parser = argparse.ArgumentParser()
+   parser.add_argument('func', type=str, choices=list(func_map.keys()))
+   args = parser.parse_args()
+   func_map[args.func]()
