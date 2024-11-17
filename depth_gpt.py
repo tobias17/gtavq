@@ -5,7 +5,7 @@ class DepthGptConfig:
    max_size: int = 128
    frame_vocab: int = 1024
    depth_vocab: int = 256
-   n_layer: int = 12
+   n_layer: int = 16
    n_head: int = 16
    dim: int = 1024
    ff_mult: float = 4.0

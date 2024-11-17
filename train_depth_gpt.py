@@ -74,7 +74,7 @@ def train():
    BEAM.value  = 0
 
    GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
-   DEVICE_BS = 6
+   DEVICE_BS = 4
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
    AVG_EVERY  = 50
@@ -135,6 +135,8 @@ def train():
 
       curr_losses.append(loss_item := loss.item())
       info.step_i += 1
+
+      # assert info.step_i < 10
 
       if info.step_i % AVG_EVERY == 0:
          info.losses.append(sum(curr_losses) / len(curr_losses))
