@@ -64,17 +64,21 @@ class Dataset:
             self.pointer = 0
       return Tensor(np.stack(frame_accum)), Tensor(np.stack(depth_accum))
 
-def train():
+def train(extra_args):
    Tensor.training = True
    seed_all(42)
 
-   LEARNING_RATE = 2**-18
+   parser = argparse.ArgumentParser()
+   parser.add_argument('--beam-only', action='store_true')
+   args = parser.parse_args(extra_args)
+
+   LEARNING_RATE = 2**-20
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
    GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
-   DEVICE_BS = 4
+   DEVICE_BS = 2
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
    AVG_EVERY  = 50
@@ -136,7 +140,8 @@ def train():
       curr_losses.append(loss_item := loss.item())
       info.step_i += 1
 
-      # assert info.step_i < 10
+      if args.beam_only:
+         assert info.step_i < 10
 
       if info.step_i % AVG_EVERY == 0:
          info.losses.append(sum(curr_losses) / len(curr_losses))
@@ -164,7 +169,7 @@ def train():
       print(f"{info.step_i:04d}: {(e_t-s_t)*m:.1f} ms step, {loss_item:.4f} loss")
       s_t = e_t
 
-def test():
+def test(extra_args):
    from tinygrad.nn.state import safe_load, load_state_dict
    from vqvae import Decoder, transpose_and_clip
    from PIL import Image
@@ -213,5 +218,5 @@ if __name__ == "__main__":
    import argparse
    parser = argparse.ArgumentParser()
    parser.add_argument('func', type=str, choices=list(func_map.keys()))
-   args = parser.parse_args()
-   func_map[args.func]()
+   args, extra_args = parser.parse_known_args()
+   func_map[args.func](extra_args)
