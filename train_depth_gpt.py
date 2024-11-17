@@ -101,10 +101,12 @@ def train(extra_args):
    class TrainInfo:
       step_i = 0
       losses = []
+      acc = []
       prev_weights = None
       def to_json(self): return {
          "step_i":self.step_i,
          "losses":self.losses,
+         "acc": self.acc,
          "prev_weights":self.prev_weights,
       }
       @staticmethod
@@ -116,7 +118,7 @@ def train(extra_args):
    optim = AdamW(params, lr=LEARNING_RATE)
 
    @TinyJit
-   def train_step(frames:Tensor, depths:Tensor) -> Tensor:
+   def train_step(frames:Tensor, depths:Tensor) -> Tuple[Tensor,Tensor]:
       logits = model(frames[:,:-1], depths[:,1:]).realize()
 
       loss = logits.sparse_categorical_crossentropy(frames[:,1:]).realize()
@@ -124,20 +126,22 @@ def train(extra_args):
       loss.backward()
       optim.step()
 
-      return loss.realize()
+      acc = (logits.argmax(axis=-1) == frames[:,1:]).cast(dtypes.float32).mul(100.0).mean()
+      return loss.realize(), acc.realize()
 
    FRAMES_COUNT = model.config.max_context + 1
    dataset = Dataset(FRAMES_COUNT)
-   curr_losses = []
+   curr_losses, curr_acc = [], []
 
    m = 1e3
    s_t = time.time()
    while True:
       frames, depths = dataset.next(GLOBAL_BS)
       with Context(BEAM=BEAM_VALUE):
-         loss = train_step(frames.shard(GPUS, axis=0).realize(), depths.shard(GPUS, axis=0).realize())
+         loss, acc = train_step(frames.shard(GPUS, axis=0).realize(), depths.shard(GPUS, axis=0).realize())
 
       curr_losses.append(loss_item := loss.item())
+      curr_acc.append(acc_item := acc.item())
       info.step_i += 1
 
       if args.beam_only:
@@ -146,15 +150,18 @@ def train(extra_args):
       if info.step_i % AVG_EVERY == 0:
          info.losses.append(sum(curr_losses) / len(curr_losses))
          curr_losses = []
+         info.acc.append(sum(curr_acc) / len(curr_acc))
+         curr_acc = []
 
       if info.step_i % PLOT_EVERY == 0:
-         plt.clf()
-         plt.plot(np.arange(1, len(info.losses)+1)*GLOBAL_BS*AVG_EVERY*FRAMES_COUNT, info.losses)
-         plt.ylim((0,None))
-         plt.title("Loss")
-         fig = plt.gcf()
-         fig.set_size_inches(18, 10)
-         plt.savefig(save_path(f"graph_loss.png"))
+         for coll, name, ylim in ((info.losses,"Loss",(0,None)), (info.acc,"Acc",(0,100))):
+            plt.clf()
+            plt.plot(np.arange(1, len(coll)+1)*GLOBAL_BS*AVG_EVERY*FRAMES_COUNT, coll)
+            plt.ylim(ylim)
+            plt.title(name)
+            fig = plt.gcf()
+            fig.set_size_inches(18, 10)
+            plt.savefig(save_path(f"graph_{name.lower()}.png"))
 
       if info.step_i % SAVE_EVERY == 0:
          curr_weights = save_path(f"weights_{underscore_number(info.step_i)}.st")
@@ -166,7 +173,7 @@ def train(extra_args):
             json.dump(info.to_json(), f)
 
       e_t = time.time()
-      print(f"{info.step_i:04d}: {(e_t-s_t)*m:.1f} ms step, {loss_item:.4f} loss")
+      print(f"{info.step_i:04d}: {(e_t-s_t)*m:.1f} ms step, {loss_item:.4f} loss, {acc_item:.1f}% acc")
       s_t = e_t
 
 def test(extra_args):
