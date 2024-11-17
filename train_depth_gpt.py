@@ -178,27 +178,31 @@ def test():
    print(f"Loading weights from: {weights_path}")
    load_state_dict(model, safe_load(weights_path))
    dataset = Dataset(model.config.max_context+1)
+   decoder = Decoder().load_from_pretrained()
 
    INPUT_SIZE = 4
-   GEN_COUNT  = model.config.max_context - INPUT_SIZE - 1
+   GEN_COUNT  = model.config.max_context - INPUT_SIZE
 
-   frames, depths = dataset.next(1)
+   for scene_i in range(10):
+      out_folder = f"frames/scene_{scene_i}"
+      os.makedirs(out_folder, exist_ok=True)
 
-   curr_size = INPUT_SIZE
-   x_in = frames[:,:INPUT_SIZE]
-   for _ in tqdm(range(GEN_COUNT)):
-      logits = model(x_in, depths[:,1:curr_size+1]).realize()
-      next_frame = logits[:,-1:].argmax(axis=-1)
-      x_in = x_in.cat(next_frame, dim=1).realize()
-      curr_size += 1
-      assert x_in.shape[1] == curr_size
+      frames, depths = dataset.next(1)
 
-   decoder = Decoder().load_from_pretrained()
-   in_frames  = transpose_and_clip(decoder(frames.squeeze(0))).numpy()
-   out_frames = transpose_and_clip(decoder(x_in.squeeze(0))).numpy()
-   for i in range(INPUT_SIZE + GEN_COUNT):
-      Image.fromarray(in_frames[i]).save(f"frames/real_{i:02d}.png")
-      Image.fromarray(out_frames[i]).save(f"frames/gen_{i:02d}_{'r' if i < INPUT_SIZE else 'f'}.png")
+      curr_size = INPUT_SIZE
+      x_in = frames[:,:INPUT_SIZE]
+      for _ in tqdm(range(GEN_COUNT)):
+         logits = model(x_in, depths[:,1:curr_size+1]).realize()
+         next_frame = logits[:,-1:].argmax(axis=-1)
+         x_in = x_in.cat(next_frame, dim=1).realize()
+         curr_size += 1
+         assert x_in.shape[1] == curr_size
+
+      in_frames  = transpose_and_clip(decoder(frames.squeeze(0))).numpy()
+      out_frames = transpose_and_clip(decoder(x_in.squeeze(0))).numpy()
+      for i in range(INPUT_SIZE + GEN_COUNT):
+         Image.fromarray( in_frames[i]).save(f"{out_folder}/real_{i:02d}.png")
+         Image.fromarray(out_frames[i]).save(f"{out_folder}/gen_{i:02d}_{'r' if i < INPUT_SIZE else 'f'}.png")
 
 if __name__ == "__main__":
    func_map = {
