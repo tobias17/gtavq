@@ -6,6 +6,7 @@ import numpy as np
 import os
 import torch
 
+START_AFTER = 12
 BATCH_SIZE = 20
 AMOUNT_PER = 240
 
@@ -22,6 +23,8 @@ def main():
 
    dataset = load_dataset("/home/tobi/datasets/commavq", trust_remote_code=True)
    for split_key, split in dataset.items():
+      if START_AFTER >= 0 and split_key in [f"{i}" for i in range(START_AFTER)]:
+         continue
       print(f"Starting split '{split_key}'")
       for filepath in tqdm(split["path"]):
          filename = os.path.basename(filepath)

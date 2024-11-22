@@ -72,13 +72,13 @@ def train(extra_args):
    parser.add_argument('--beam-only', action='store_true')
    args = parser.parse_args(extra_args)
 
-   LEARNING_RATE = 2**-20
+   LEARNING_RATE = 2**-14
    TRAIN_DTYPE = dtypes.float32
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
    GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
-   DEVICE_BS = 2
+   DEVICE_BS = 4
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
    AVG_EVERY  = 50
