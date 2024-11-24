@@ -7,12 +7,12 @@ from PIL import Image
 from threading import Thread
 import time
 
-START_AFTER = 10
+START_AFTER = 16
 BATCH_SIZE = 24
 MAX_PER = BATCH_SIZE * 10
 
-# OUT_ROOT = f"/net/tiny/raid/datasets/depthvq"
-OUT_ROOT = "."
+OUT_ROOT = f"/net/tiny/raid/datasets/depthvq"
+# OUT_ROOT = "."
 
 def get_filepath_for(out_root:str, index:int) -> str:
    return f"{out_root}/{index:04d}.png"

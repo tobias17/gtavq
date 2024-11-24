@@ -3,7 +3,7 @@ from tinygrad.helpers import prod, BEAM, Context, tqdm
 from tinygrad.nn.optim import AdamW
 from tinygrad.nn.state import get_parameters, safe_save, get_state_dict
 from depth_gpt import GPT
-from util import seed_all, underscore_number, get_latest_weights_path
+from util_ import seed_all, underscore_number, get_latest_weights_path
 import json, os, math, random, time, datetime
 import numpy as np
 from typing import List, Tuple
