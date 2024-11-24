@@ -132,6 +132,32 @@ def tokenize_frames():
 def gen_images():
    depths = np.load(f"{GLOBAL_ROOT}/depth_tokens.npy")
    frames = np.load(f"{GLOBAL_ROOT}/frame_tokens.npy")
+   
+   from vqvae import Decoder
+   decoder = Decoder().load_from_pretrained()
+   
+   from depth_gpt import GPT
+   model = GPT()
+   from tinygrad.nn.state import load_state_dict, safe_load
+   load_state_dict(model, safe_load("./weights/weights_260_000.st"))
+   CTX_SIZE = model.config.max_context
+
+   frame_tokens = np.load(f"{GLOBAL_ROOT}/frame_tokens.npy")
+   depth_tokens = np.load(f"{GLOBAL_ROOT}/depth_tokens.npy")
+
+   from tinygrad import Tensor, TinyJit
+   @TinyJit
+   def run_model(frames:Tensor, depths:Tensor) -> Tensor:
+      return model(frames, depths)[:,-1:].argmax(axis=-1).realize()
+   
+   from tinygrad.helpers import tqdm
+   frames = Tensor(frame_tokens[:CTX_SIZE]).unsqueeze(0)
+   for i in tqdm(range(16)):
+      frame_ctx = frames[:,-CTX_SIZE:]
+      depth_ctx = Tensor(depth_tokens[i+1:CTX_SIZE+i+1]).unsqueeze(0)
+      next_frame = run_model(frame_ctx.contiguous().realize(), depth_ctx.realize())
+      frames = frames.cat(next_frame, dim=1)
+   print(frames.shape)
 
 if __name__ == "__main__":
    crop_images()
