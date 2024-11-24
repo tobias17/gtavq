@@ -81,9 +81,9 @@ def train(extra_args):
    DEVICE_BS = 4
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
-   AVG_EVERY  = 50
-   PLOT_EVERY = 500
-   SAVE_EVERY = 4000
+   AVG_EVERY  = 250
+   PLOT_EVERY = 1000
+   SAVE_EVERY = 5000
 
    model = GPT()
    params = get_parameters(model)
