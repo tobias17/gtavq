@@ -89,12 +89,53 @@ def tokenize_depthmaps():
       x_out.append(run_batch(batch))
    
    output = np.concatenate(x_out, axis=0)
+   output = output.reshape(-1, 128)
    print(f"Created depth tokens with shape: {output.shape}")
    assert output.shape[0] == len(filenames), f"{output.shape[0]} != {len(filenames)}"
    np.save(OUTPUT_FILE, output)
 
+def tokenize_frames():
+   INPUT_ROOT = f"{GLOBAL_ROOT}/cropped"
+   OUTPUT_FILE = f"{GLOBAL_ROOT}/frame_tokens.npy"
+   if os.path.exists(OUTPUT_FILE):
+      print("Frame tokens already exist, skipping")
+      return
+   
+   filenames = sorted(os.listdir(INPUT_ROOT))
+   
+   BATCH_SIZE = 20
+   from tinygrad import Tensor
+   from vqvae import Encoder
+   encoder = Encoder().load_from_pretrained()
+
+   def run_batch(images):
+      x_in = Tensor.stack(*images)
+      return encoder(x_in).argmax(axis=-1).numpy()
+
+   x_out = []
+   batch = []
+   for filename in tqdm(filenames):
+      frame_path = f"{INPUT_ROOT}/{filename}"
+      frame = np.array(Image.open(frame_path)).astype(np.float16)
+      batch.append(Tensor(frame).permute(2,0,1).realize())
+      if len(batch) >= BATCH_SIZE:
+         x_out.append(run_batch(batch))
+         batch = []
+   if len(batch) > 0:
+      x_out.append(run_batch(batch))
+   
+   output = np.concatenate(x_out, axis=0)
+   print(f"Created frame tokens with shape: {output.shape}")
+   assert output.shape[0] == len(filenames), f"{output.shape[0]} != {len(filenames)}"
+   np.save(OUTPUT_FILE, output)
+
+def gen_images():
+   depths = np.load(f"{GLOBAL_ROOT}/depth_tokens.npy")
+   frames = np.load(f"{GLOBAL_ROOT}/frame_tokens.npy")
 
 if __name__ == "__main__":
    crop_images()
    make_depthmaps()
    tokenize_depthmaps()
+   tokenize_frames()
+   gen_images()
