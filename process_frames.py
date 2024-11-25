@@ -145,7 +145,7 @@ def gen_images():
    frame_tokens = np.load(f"{GLOBAL_ROOT}/frame_tokens.npy")
    depth_tokens = np.load(f"{GLOBAL_ROOT}/depth_tokens.npy")
 
-   from tinygrad import Tensor, TinyJit
+   from tinygrad import Tensor, TinyJit, dtypes
    @TinyJit
    def run_model(frames:Tensor, depths:Tensor) -> Tensor:
       return model(frames, depths)[:,-1:].argmax(axis=-1).realize()
@@ -158,6 +158,18 @@ def gen_images():
       next_frame = run_model(frame_ctx.contiguous().realize(), depth_ctx.realize())
       frames = frames.cat(next_frame, dim=1)
    print(frames.shape)
+   frames = frames.squeeze(0)
+
+   OUT_ROOT = f"{GLOBAL_ROOT}/generated"
+   if not os.path.exists(OUT_ROOT):
+      os.mkdir(OUT_ROOT)
+
+   @TinyJit
+   def decode_frame(x:Tensor) -> Tensor:
+      return decoder(x).squeeze(0).permute(1,2,0).clip(0.0, 255.0).cast(dtypes.uint8).realize()
+   for i in tqdm(range(frames.shape[0])):
+      frame = decode_frame(frames[i:i+1].contiguous().realize()).numpy()
+      Image.fromarray(frame).save(f"{OUT_ROOT}/frame_{i:04d}.png")
 
 if __name__ == "__main__":
    crop_images()
