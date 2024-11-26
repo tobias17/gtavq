@@ -30,7 +30,8 @@ def main():
    def encode_latent(im:Tensor) -> Tensor:
       x = im.div(255.0) * 2.0 - 1.0 
       z = model.first_stage_model.quant_conv(model.first_stage_model.encoder(x)).chunk(2, dim=1)[0]
-      return z.mul(0.18215).realize()
+      z = z.mul(0.18215).cast(dtypes.float16).rearrange('b c h w -> b (h w) c')
+      return z.realize()
 
    dataset = load_dataset("/home/tobi/datasets/commavq", trust_remote_code=True)
    for split_key, split in dataset.items():
@@ -67,13 +68,13 @@ def main():
                   assert isinstance(all_tokens, np.ndarray)
                   tokens = Tensor(all_tokens[start_i:start_i+BATCH_SIZE]).rearrange('b h w -> b (h w)')
 
-                  frames = decoder(tokens)
-                  depths = Tensor.cat(*depthmaps)
+                  frames = decoder(tokens).realize()
+                  depths = Tensor.cat(*depthmaps).realize()
                   assert depths.shape == frames.shape, f"shape mismatch, {depths.shape} != {frames.shape}"
 
                   with Context(BEAM=1):
-                     frames_z = encode_latent(frames.realize()).cast(dtypes.float16).numpy()
-                     depths_z = encode_latent(depths.realize()).cast(dtypes.float16).numpy()
+                     frames_z = encode_latent(frames.realize()).numpy()
+                     depths_z = encode_latent(depths.realize()).numpy()
 
                   assert depths_z.shape == frames_z.shape, f"shape mismatch, {depths_z.shape} != {frames_z.shape}"
                   os.makedirs(os.path.dirname(latents_path), exist_ok=True)
