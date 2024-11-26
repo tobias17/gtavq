@@ -2,13 +2,13 @@ from tinygrad import Tensor, nn
 
 class LatentGptConfig:
    max_context: int = 16
-   max_size: int = 128
+   max_size: int = 512
    in_dims: int = 8
    out_dims: int = 4
    n_layer: int = 16
-   n_head: int = 16
-   dim: int = 1024
-   ff_mult: float = 3.0
+   n_head: int = 12
+   dim: int = 768
+   ff_mult: float = 4.0
 
 class Attention:
    def __init__(self, config:LatentGptConfig, is_causal:bool):
@@ -72,8 +72,8 @@ class GPT:
       assert frames.shape == depths.shape
 
       x = frames.cat(depths, dim=-1)
-      pos_c = self.pos_c_embed(Tensor.arange(frames.shape[1], device=frames.device).reshape(1,-1,1,1))
-      pos_s = self.pos_s_embed(Tensor.arange(frames.shape[2], device=frames.device).reshape(1,1,-1,1))
+      pos_c = self.pos_c_embed(Tensor.arange(frames.shape[1], device=frames.device).reshape(1,-1,1))
+      pos_s = self.pos_s_embed(Tensor.arange(frames.shape[2], device=frames.device).reshape(1,1,-1))
       x = self.proj_in(x) + pos_c + pos_s
       x = x.sequential(self.layers) # type: ignore
       x = self.proj_out(self.ln_f(x))

@@ -78,7 +78,7 @@ def train(extra_args):
    BEAM.value  = 0
 
    GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
-   DEVICE_BS = 4
+   DEVICE_BS = 1
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
    AVG_EVERY  = 250
