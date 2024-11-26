@@ -77,7 +77,7 @@ def train(extra_args):
    BEAM_VALUE  = BEAM.value
    BEAM.value  = 0
 
-   GPUS = [f"{Device.DEFAULT}:{i}" for i in range(6)]
+   GPUS = tuple([f"{Device.DEFAULT}:{i}" for i in range(6)])
    DEVICE_BS = 1
    GLOBAL_BS = DEVICE_BS * len(GPUS)
 
@@ -100,7 +100,7 @@ def train(extra_args):
    @dataclass
    class TrainInfo:
       step_i = 0
-      losses = []
+      losses: List[float] = []
       prev_weights = None
       def to_json(self): return {
          "step_i":self.step_i,
