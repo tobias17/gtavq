@@ -146,7 +146,6 @@ def train(extra_args):
       if info.step_i % AVG_EVERY == 0:
          info.losses.append(sum(curr_losses) / len(curr_losses))
          curr_losses = []
-         curr_acc = []
 
       if info.step_i % PLOT_EVERY == 0:
          for coll, name, ylim in ((info.losses,"Loss",(0,None)),):
@@ -171,50 +170,62 @@ def train(extra_args):
       print(f"{info.step_i:04d}: {(e_t-s_t)*m:.1f} ms step, {loss_item:.4f} loss")
       s_t = e_t
 
-# def test(extra_args):
-#    from tinygrad.nn.state import safe_load, load_state_dict
-#    from vqvae import Decoder, transpose_and_clip
-#    from PIL import Image
+def test(extra_args):
+   from tinygrad.nn.state import load_state_dict, safe_load, torch_load
+   from tinygrad.helpers import fetch
+   from examples.stable_diffusion import StableDiffusion
+   from PIL import Image
 
-#    Tensor.training = True
-#    Tensor.no_grad  = True
-#    seed_all(42)
+   Tensor.training = True
+   Tensor.no_grad  = True
+   seed_all(42)
 
-#    model = GPT()
-#    weights_path = get_latest_weights_path()
-#    print(f"Loading weights from: {weights_path}")
-#    load_state_dict(model, safe_load(weights_path))
-#    dataset = Dataset(model.config.max_context+1)
-#    decoder = Decoder().load_from_pretrained()
+   model = GPT()
+   weights_path = get_latest_weights_path()
+   print(f"Loading weights from: {weights_path}")
+   load_state_dict(model, safe_load(weights_path))
+   dataset = Dataset(model.config.max_context+1)
+   
+   stable_diffusion = StableDiffusion()
+   del stable_diffusion.model
+   del stable_diffusion.cond_stage_model
+   weights_path = str(fetch('https://huggingface.co/CompVis/stable-diffusion-v-1-4-original/resolve/main/sd-v1-4.ckpt', 'sd-v1-4.ckpt'))
+   load_state_dict(model, torch_load(weights_path)['state_dict'], strict=False) # type: ignore
+   def decode(x:Tensor) -> Tensor:
+      x = stable_diffusion.first_stage_model.post_quant_conv(1/0.18215 * x)
+      x = stable_diffusion.first_stage_model.decoder(x)
+      x = (x + 1.0) / 2.0
+      x = x.reshape(-1,3,128,512).permute(0,2,3,1).clip(0,1) * 255
+      return x.cast(dtypes.uint8)
 
-#    INPUT_SIZE = 4
-#    GEN_COUNT  = model.config.max_context - INPUT_SIZE
+   INPUT_SIZE = 4
+   GEN_COUNT  = model.config.max_context - INPUT_SIZE
 
-#    for scene_i in range(10):
-#       out_folder = f"frames/scene_{scene_i}"
-#       os.makedirs(out_folder, exist_ok=True)
+   for scene_i in range(10):
+      out_folder = f"frames/scene_{scene_i}"
+      os.makedirs(out_folder, exist_ok=True)
 
-#       frames, depths = dataset.next(1)
+      frames, depths = dataset.next(1)
 
-#       curr_size = INPUT_SIZE
-#       x_in = frames[:,:INPUT_SIZE]
-#       for _ in tqdm(range(GEN_COUNT)):
-#          logits = model(x_in, depths[:,1:curr_size+1]).realize()
-#          next_frame = logits[:,-1:].argmax(axis=-1)
-#          x_in = x_in.cat(next_frame, dim=1).realize()
-#          curr_size += 1
-#          assert x_in.shape[1] == curr_size
+      curr_size = INPUT_SIZE
+      x_in = frames[:,:INPUT_SIZE]
+      for _ in tqdm(range(GEN_COUNT)):
+         logits = model(x_in, depths[:,1:curr_size+1]).realize()
+         next_frame = logits[:,-1:].argmax(axis=-1)
+         x_in = x_in.cat(next_frame, dim=1).realize()
+         curr_size += 1
+         assert x_in.shape[1] == curr_size
 
-#       in_frames  = transpose_and_clip(decoder(frames.squeeze(0))).numpy()
-#       out_frames = transpose_and_clip(decoder(x_in.squeeze(0))).numpy()
-#       for i in range(INPUT_SIZE + GEN_COUNT):
-#          Image.fromarray( in_frames[i]).save(f"{out_folder}/real_{i:02d}.png")
-#          Image.fromarray(out_frames[i]).save(f"{out_folder}/gen_{i:02d}_{'r' if i < INPUT_SIZE else 'f'}.png")
+      in_frames  = decode(frames.squeeze(0)).numpy()
+      out_frames = decode(x_in  .squeeze(0)).numpy()
+      for i in range(INPUT_SIZE + GEN_COUNT):
+         Image.fromarray( in_frames[i]).save(f"{out_folder}/real_{i:02d}.png")
+         Image.fromarray(out_frames[i]).save(f"{out_folder}/gen_{i:02d}_{'r' if i < INPUT_SIZE else 'f'}.png")
 
 if __name__ == "__main__":
    func_map = {
       "train": train,
-      # "test":  test,
+      "test":  test,
    }
 
    import argparse
