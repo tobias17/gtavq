@@ -100,7 +100,7 @@ def train(extra_args):
    @dataclass
    class TrainInfo:
       step_i = 0
-      losses: List[float] = []
+      losses = [] # type: ignore
       prev_weights = None
       def to_json(self): return {
          "step_i":self.step_i,
@@ -190,13 +190,15 @@ def test(extra_args):
    del stable_diffusion.model
    del stable_diffusion.cond_stage_model
    weights_path = str(fetch('https://huggingface.co/CompVis/stable-diffusion-v-1-4-original/resolve/main/sd-v1-4.ckpt', 'sd-v1-4.ckpt'))
-   load_state_dict(model, torch_load(weights_path)['state_dict'], strict=False) # type: ignore
+   load_state_dict(stable_diffusion, torch_load(weights_path)['state_dict'], strict=False) # type: ignore
    def decode(x:Tensor) -> Tensor:
+      B = x.shape[0]
+      x = x.reshape(B, 16, 32, 4).rearrange('b h w c -> b c h w')
       x = stable_diffusion.first_stage_model.post_quant_conv(1/0.18215 * x)
       x = stable_diffusion.first_stage_model.decoder(x)
       x = (x + 1.0) / 2.0
-      x = x.reshape(-1,3,128,512).permute(0,2,3,1).clip(0,1) * 255
-      return x.cast(dtypes.uint8)
+      x = x.rearrange('b c h w -> b h w c').clip(0,1) * 255
+      return x.cast(dtypes.uint8).realize()
 
    INPUT_SIZE = 4
    GEN_COUNT  = model.config.max_context - INPUT_SIZE
@@ -206,18 +208,18 @@ def test(extra_args):
       os.makedirs(out_folder, exist_ok=True)
 
       frames, depths = dataset.next(1)
+      in_frames  = decode(frames.squeeze(0)).numpy()
 
       curr_size = INPUT_SIZE
-      x_in = frames[:,:INPUT_SIZE]
+      z_in = frames[:,:INPUT_SIZE].realize()
       for _ in tqdm(range(GEN_COUNT)):
-         logits = model(x_in, depths[:,1:curr_size+1]).realize()
-         next_frame = logits[:,-1:].argmax(axis=-1)
-         x_in = x_in.cat(next_frame, dim=1).realize()
+         z_gen = model(z_in, depths[:,1:curr_size+1]).realize()
+         z_next = z_gen[:,-1:]
+         z_in = z_in.cat(z_next, dim=1).realize()
          curr_size += 1
-         assert x_in.shape[1] == curr_size
+         assert z_in.shape[1] == curr_size
 
-      in_frames  = decode(frames.squeeze(0)).numpy()
-      out_frames = decode(x_in  .squeeze(0)).numpy()
+      out_frames = decode(z_in  .squeeze(0)).numpy()
       for i in range(INPUT_SIZE + GEN_COUNT):
          Image.fromarray( in_frames[i]).save(f"{out_folder}/real_{i:02d}.png")
          Image.fromarray(out_frames[i]).save(f"{out_folder}/gen_{i:02d}_{'r' if i < INPUT_SIZE else 'f'}.png")
