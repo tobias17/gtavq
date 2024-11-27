@@ -1,7 +1,7 @@
 from datasets import load_dataset # type: ignore
 from tinygrad import Tensor, dtypes, TinyJit, Device
 from tinygrad.helpers import tqdm, fetch, Context
-from tinygrad.nn.state import load_state_dict, torch_load, get_state_dict
+from tinygrad.nn.state import load_state_dict, torch_load, get_state_dict, get_parameters
 from examples.stable_diffusion import StableDiffusion
 from vqvae import Decoder
 from PIL import Image
@@ -30,6 +30,8 @@ def main():
          w.replace(w.shard(GPUS).realize())
 
    decoder = Decoder().load_from_pretrained()
+   for w in get_parameters(decoder):
+      w.replace(w.shard(GPUS).realize())
 
    @TinyJit
    def encode_latent(im:Tensor) -> Tensor:
@@ -72,13 +74,13 @@ def main():
                   if all_tokens is None:
                      all_tokens = np.load(filepath)
                   assert isinstance(all_tokens, np.ndarray)
-                  tokens = Tensor(all_tokens[start_i:start_i+AMOUNT_PER]).rearrange('b h w -> b (h w)')
+                  tokens = Tensor(all_tokens[start_i:start_i+AMOUNT_PER]).rearrange('b h w -> b (h w)').shard(GPUS, axis=0).realize()
 
-                  frames = decoder(tokens).shard(GPUS, axis=0).realize()
                   depths = Tensor.cat(*depthmaps).shard(GPUS, axis=0).realize()
-                  assert depths.shape == frames.shape, f"shape mismatch, {depths.shape} != {frames.shape}"
+                  # assert depths.shape == frames.shape, f"shape mismatch, {depths.shape} != {frames.shape}"
 
                   with Context(BEAM=1):
+                     frames = decoder(tokens).realize()
                      frames_z = encode_latent(frames.realize()).numpy()
                      depths_z = encode_latent(depths.realize()).numpy()
                   assert depths_z.shape == frames_z.shape, f"shape mismatch, {depths_z.shape} != {frames_z.shape}"
