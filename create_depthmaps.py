@@ -2,12 +2,12 @@ from datasets import load_dataset # type: ignore
 import numpy as np
 from tinygrad import Tensor, TinyJit
 from tinygrad.helpers import tqdm
-from vqvae import Decoder
+from vqvae import Decoder, transpose_and_clip
 from PIL import Image
 from threading import Thread
 import time
 
-START_AFTER = 16
+START_AFTER = 23
 BATCH_SIZE = 24
 MAX_PER = BATCH_SIZE * 10
 
